@@ -15,7 +15,6 @@ from .generators.api_generator import ApiGenerator
 from .generators.client_generator import ClientGenerator
 from . import PYFLOWTS_VERSION
 
-import re
 import tempfile
 import shutil
 import subprocess

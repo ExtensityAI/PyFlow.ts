@@ -208,11 +208,36 @@ def generate_ts_class(cls: Type) -> str:
         except (TypeError, NameError):
             pass
 
-    # Add property declarations
+    # Add property declarations with default values or definite assignment assertion
     for attr_name, attr_type in attrs.items():
         if not attr_name.startswith('_'):  # Skip private attributes
             ts_type = python_type_to_ts(attr_type)
-            lines.append(f"  {attr_name}: {ts_type};")
+
+            # Provide default initialization values based on type
+            default_value = None
+            if ts_type == "string":
+                default_value = '""'  # Empty string
+            elif ts_type == "number":
+                default_value = "0"
+            elif ts_type == "boolean":
+                default_value = "false"
+            elif ts_type.endswith("[]"):
+                default_value = "[]"  # Empty array
+            elif ts_type == "Date":
+                default_value = "new Date()"
+            elif "Record<" in ts_type or ts_type == "object":
+                default_value = "{}"
+            elif "Map<" in ts_type:
+                default_value = "new Map()"
+            elif "Set<" in ts_type:
+                default_value = "new Set()"
+
+            # Add the property declaration with initialization or definite assignment
+            if default_value:
+                lines.append(f"  {attr_name}: {ts_type} = {default_value};")
+            else:
+                # Use definite assignment assertion (!) for complex types without a clear default
+                lines.append(f"  {attr_name}!: {ts_type};")  # The ! tells TypeScript this will be initialized
 
     # Add constructor
     lines.append(f"  constructor(args: Partial<{class_name}> = {{}}) {{")

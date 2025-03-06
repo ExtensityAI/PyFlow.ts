@@ -427,8 +427,6 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
             output_file = output_dir / "index.ts"
             with open(output_file, 'w') as f:
                 f.write(ts_code)
-                print(ts_code)
-                print(output_file)
 
             print(f"Generated TypeScript code for module {module_name} at {output_file}")
 

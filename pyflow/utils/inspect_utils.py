@@ -4,8 +4,8 @@ Utilities for inspecting Python objects.
 import inspect
 import importlib
 import pkgutil
-import typing
-from typing import Any, Dict, List, Callable, Type, get_type_hints, Set, Optional, Union, Tuple
+import re
+from typing import Any, Dict, List, Callable, Type, get_type_hints, Set, Tuple
 import sys
 
 def get_module_classes(module_name: str) -> Dict[str, Type]:
@@ -412,10 +412,6 @@ def _safe_get_decorated_items(module_name: str) -> Tuple[List[Type], List[Callab
         # Read the source code to find decorated items
         with open(module_file, 'r') as f:
             source = f.read()
-
-        # Look for @extensity decorator in the source code
-        decorated_items = []
-        import re
 
         # Find all class and function definitions with @extensity
         # This is a simple regex approach, not perfect but works for common cases
