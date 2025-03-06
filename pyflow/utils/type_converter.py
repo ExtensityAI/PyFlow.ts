@@ -147,17 +147,23 @@ def generate_ts_interface(cls: Type) -> str:
             if params and params[0][0] == 'self':
                 params = params[1:]  # Remove 'self' parameter
 
-            param_strings = []
+            # Separate required and optional parameters
+            required_params = []
+            optional_params = []
+
             for param_name, param in params:
                 if param_name in method_hints:
                     param_type = python_type_to_ts(method_hints[param_name])
                 else:
                     param_type = "any"
 
-                if param.default is not inspect.Parameter.empty:
-                    param_strings.append(f"{param_name}?: {param_type}")
+                if param.default is inspect.Parameter.empty:
+                    required_params.append(f"{param_name}: {param_type}")
                 else:
-                    param_strings.append(f"{param_name}: {param_type}")
+                    optional_params.append(f"{param_name}?: {param_type}")
+
+            # Combine parameters with required first, then optional
+            param_strings = required_params + optional_params
 
             return_type = "any"
             if "return" in method_hints and method_hints["return"] is not type(None):
@@ -259,20 +265,28 @@ def generate_ts_class(cls: Type) -> str:
             if params and params[0][0] == 'self':
                 params = params[1:]  # Remove 'self' parameter
 
-            param_strings = []
-            param_names = []
+            # Separate required and optional parameters
+            required_params = []
+            optional_params = []
+            required_param_names = []
+            optional_param_names = []
+
             for param_name, param in params:
                 if param_name in method_hints:
                     param_type = python_type_to_ts(method_hints[param_name])
                 else:
                     param_type = "any"
 
-                if param.default is not inspect.Parameter.empty:
-                    param_strings.append(f"{param_name}?: {param_type}")
+                if param.default is inspect.Parameter.empty:
+                    required_params.append(f"{param_name}: {param_type}")
+                    required_param_names.append(param_name)
                 else:
-                    param_strings.append(f"{param_name}: {param_type}")
+                    optional_params.append(f"{param_name}?: {param_type}")
+                    optional_param_names.append(param_name)
 
-                param_names.append(param_name)
+            # Combine parameters with required first, then optional
+            param_strings = required_params + optional_params
+            param_names = required_param_names + optional_param_names
 
             return_type = "any"
             if "return" in method_hints and method_hints["return"] is not type(None):
@@ -325,20 +339,28 @@ def generate_ts_function(func) -> str:
         hints = get_type_hints(func)
         params = list(inspect.signature(func).parameters.items())
 
-        param_strings = []
-        param_names = []
+        # Separate required and optional parameters
+        required_params = []
+        optional_params = []
+        required_param_names = []
+        optional_param_names = []
+
         for param_name, param in params:
             if param_name in hints:
                 param_type = python_type_to_ts(hints[param_name])
             else:
                 param_type = "any"
 
-            if param.default is not inspect.Parameter.empty:
-                param_strings.append(f"{param_name}?: {param_type}")
+            if param.default is inspect.Parameter.empty:
+                required_params.append(f"{param_name}: {param_type}")
+                required_param_names.append(param_name)
             else:
-                param_strings.append(f"{param_name}: {param_type}")
+                optional_params.append(f"{param_name}?: {param_type}")
+                optional_param_names.append(param_name)
 
-            param_names.append(param_name)
+        # Combine parameters with required first, then optional
+        param_strings = required_params + optional_params
+        param_names = required_param_names + optional_param_names
 
         return_type = "any"
         if "return" in hints:
