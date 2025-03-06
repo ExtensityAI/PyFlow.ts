@@ -3,411 +3,352 @@ Type conversion utilities for PyFlow.ts.
 """
 import inspect
 import typing
-from typing import get_type_hints, Any, Dict, List, Set, Tuple, Optional, Union, Type
+from typing import Any, Dict, List, Set, Tuple, Type, Union, Optional, get_type_hints
 
-def _get_ts_type(py_type) -> str:
-    """Convert a Python type to a TypeScript type."""
-    if py_type is None or py_type == type(None):
+def python_type_to_ts(python_type) -> str:
+    """Convert a Python type to TypeScript type."""
+    # Handle None, NoneType
+    if python_type is type(None) or python_type is None:
         return "null"
-    elif py_type == str:
+
+    # Handle basic types
+    if python_type is str:
         return "string"
-    elif py_type == int or py_type == float:
+    elif python_type is int or python_type is float:
         return "number"
-    elif py_type == bool:
+    elif python_type is bool:
         return "boolean"
-    elif py_type == dict or py_type == Dict:
+    elif python_type is list or python_type is List:
+        return "any[]"
+    elif python_type is dict or python_type is Dict:
         return "Record<string, any>"
-    elif py_type == list or py_type == List:
-        return "any[]"
-    elif py_type == set or py_type == Set:
+    elif python_type is set or python_type is Set:
         return "Set<any>"
-    elif py_type == tuple or py_type == Tuple:
-        return "any[]"
-    elif hasattr(py_type, '__origin__'):
-        # Handle typing generics like List[str], Dict[str, int], etc.
-        origin = py_type.__origin__
-        if origin == list or origin == List:
-            if hasattr(py_type, '__args__') and py_type.__args__:
-                arg_type = _get_ts_type(py_type.__args__[0])
+    elif python_type is tuple or python_type is Tuple:
+        return "any[]"  # TypeScript doesn't have tuples in the same way
+    elif python_type is Any or python_type is object:
+        return "any"
+
+    # Handle generic types (List[T], Dict[K,V], etc.)
+    origin = getattr(python_type, "__origin__", None)
+    if origin:
+        args = getattr(python_type, "__args__", [])
+
+        if origin is list or origin is List:
+            if args:
+                arg_type = python_type_to_ts(args[0])
                 return f"{arg_type}[]"
             return "any[]"
-        elif origin == dict or origin == Dict:
-            if hasattr(py_type, '__args__') and len(py_type.__args__) == 2:
-                key_type = _get_ts_type(py_type.__args__[0])
-                value_type = _get_ts_type(py_type.__args__[1])
-                if key_type == "string":
-                    return f"Record<string, {value_type}>"
-                return f"Map<{key_type}, {value_type}>"
-            return "Record<string, any>"
-        elif origin == Union:
-            if hasattr(py_type, '__args__'):
-                # Handle Optional[Type] => Type | null
-                if len(py_type.__args__) == 2 and type(None) in py_type.__args__:
-                    other_type = [t for t in py_type.__args__ if t is not type(None)][0]
-                    return f"{_get_ts_type(other_type)} | null"
-                # Regular union type
-                union_types = [_get_ts_type(arg) for arg in py_type.__args__]
-                return " | ".join(union_types)
-            return "any"
-        elif origin == tuple or origin == Tuple:
-            if hasattr(py_type, '__args__') and py_type.__args__:
-                tuple_types = [_get_ts_type(arg) for arg in py_type.__args__]
-                return f"[{', '.join(tuple_types)}]"
-            return "any[]"
-    elif py_type == Any:
-        return "any"
-    elif py_type == inspect._empty:
-        return "any"
-    elif hasattr(py_type, "__name__"):
-        # Class types
-        return py_type.__name__
 
-    # Default to any for types we don't recognize
+        elif origin is dict or origin is Dict:
+            if len(args) >= 2:
+                key_type = python_type_to_ts(args[0])
+                val_type = python_type_to_ts(args[1])
+                if key_type == "string" or key_type == "number":
+                    return f"Record<{key_type}, {val_type}>"
+                return f"Map<{key_type}, {val_type}>"
+            return "Record<string, any>"
+
+        elif origin is Union:
+            # Handle Optional[T] which is Union[T, None]
+            if len(args) == 2 and args[1] is type(None):
+                return f"{python_type_to_ts(args[0])} | null"
+
+            # Regular union type
+            types = [python_type_to_ts(arg) for arg in args]
+            return " | ".join(types)
+
+        elif origin is Optional:
+            if args:
+                return f"{python_type_to_ts(args[0])} | null"
+            return "any | null"
+
+        elif origin is set or origin is Set:
+            if args:
+                arg_type = python_type_to_ts(args[0])
+                return f"Set<{arg_type}>"
+            return "Set<any>"
+
+        elif origin is tuple or origin is Tuple:
+            if args:
+                arg_types = [python_type_to_ts(arg) for arg in args]
+                return f"[{', '.join(arg_types)}]"
+            return "any[]"
+
+    # Try to handle classes by name
+    if inspect.isclass(python_type):
+        return python_type.__name__
+
+    # Default fallback
     return "any"
 
 def generate_ts_interface(cls: Type) -> str:
-    """Generate a TypeScript interface from a Python class."""
+    """Generate TypeScript interface from a Python class."""
     class_name = cls.__name__
 
-    # Extract class variables with type annotations
-    properties = []
-    for name, annotation in getattr(cls, "__annotations__", {}).items():
-        if not name.startswith('_'):  # Skip private attributes
-            ts_type = _get_ts_type(annotation)
-            properties.append(f"  {name}: {ts_type};")
+    # Get type hints for class attributes
+    try:
+        attrs = get_type_hints(cls)
+    except (TypeError, NameError):
+        attrs = {}
 
-    # Extract methods
-    methods = []
-    for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if not name.startswith('_') or name == '__init__':  # Include __init__ but skip other private methods
-            # Skip the method if it's decorated with @staticmethod or @classmethod
-            if hasattr(method, "__self__") and (method.__self__ is cls or isinstance(method.__self__, type)):
-                continue
-
-            # Get return type hint
-            return_type_hint = "any"
-            try:
-                hints = get_type_hints(method)
-                if "return" in hints:
-                    return_type_hint = _get_ts_type(hints["return"])
-            except (TypeError, NameError):
-                pass  # Use default return_type if we can't determine it
-
-            # Get parameters
-            signature = inspect.signature(method)
-            params = []
-            for param_name, param in signature.parameters.items():
-                if param_name == 'self':
-                    continue
-
-                # Try to get type from type hint
-                param_type = "any"
-                try:
-                    if param_name in hints:
-                        param_type = _get_ts_type(hints[param_name])
-                except (TypeError, NameError, KeyError):
-                    pass
-
-                # Handle default values for optional parameters - use `is not` instead of `!=`
-                # to avoid triggering custom __ne__ methods
-                try:
-                    has_default = param.default is not param.empty
-                except (TypeError, AttributeError):
-                    # Handle case where comparison fails
-                    has_default = False
-
-                if has_default:
-                    params.append(f"{param_name}?: {param_type}")
-                else:
-                    params.append(f"{param_name}: {param_type}")
-
-            params_str = ", ".join(params)
-            methods.append(f"  {name}({params_str}): Promise<{return_type_hint}>;")
-
-    # Generate interface code
-    ts_interface = f"export interface {class_name} {{\n"
-    if properties:
-        ts_interface += "\n".join(properties) + "\n"
-    if methods:
-        ts_interface += "\n".join(methods) + "\n"
-    ts_interface += "}\n"
-
-    return ts_interface
-
-def generate_ts_class(cls: Type) -> str:
-    """Generate a TypeScript class from a Python class."""
-    class_name = cls.__name__
-
-    # Start the class definition
-    ts_class = f"export class {class_name} {{\n\n"
-
-    # Add private fields for constructor args and instance ID
-    ts_class += "  private _constructorArgs: any;\n"
-    ts_class += "  private _instanceId: string | null = null;\n\n"
-
-    # Add instance management methods
-    ts_class += "  private async _ensureInstance(): Promise<void> {\n"
-    ts_class += "    if (!this._instanceId) {\n"
-    ts_class += "      this._instanceId = await pyflowRuntime.createInstance(this.constructor.name, this._constructorArgs);\n"
-    ts_class += "    }\n"
-    ts_class += "  }\n\n"
-
-    ts_class += "  private async _callPythonMethod(methodName: string, args: any): Promise<any> {\n"
-    ts_class += "    // Ensure we have an instance ID before calling methods\n"
-    ts_class += "    await this._ensureInstance();\n"
-    ts_class += "    // Call the method on our specific instance\n"
-    ts_class += "    return pyflowRuntime.callMethod(this.constructor.name, methodName, args, this._constructorArgs);\n"
-    ts_class += "  }\n\n"
-
-    # Generate constructor
-    constructor_params = []
-    constructor_body = []
-
-    # Initialize constructor args object
-    constructor_body.append("    this._constructorArgs = {};")
-    constructor_body.append("    this._constructorArgs['_module'] = 'symai.components';")
-
-    # Get constructor parameters
-    init_method = getattr(cls, "__init__", None)
-    if init_method and hasattr(init_method, "__code__"):
-        signature = inspect.signature(init_method)
-        hints = {}
+    # Add instance variables from __init__ method
+    if hasattr(cls, "__init__") and cls.__init__ is not object.__init__:
         try:
-            hints = get_type_hints(init_method)
+            init_hints = get_type_hints(cls.__init__)
+            # Remove 'self' and 'return'
+            init_hints.pop('self', None)
+            init_hints.pop('return', None)
+            # Merge with class attrs
+            attrs.update(init_hints)
         except (TypeError, NameError):
             pass
 
-        for param_name, param in signature.parameters.items():
-            if param_name == 'self':
-                continue
+    # Build the interface string
+    lines = [f"export interface I{class_name} {{"]
 
-            if param_name == 'kwargs' or param.kind == param.VAR_KEYWORD:
-                # Handle **kwargs specially - make it optional
-                constructor_params.append("kwargs?: any")
-                continue
+    # Add attributes
+    for attr_name, attr_type in attrs.items():
+        if not attr_name.startswith('_'):  # Skip private attributes
+            ts_type = python_type_to_ts(attr_type)
+            lines.append(f"  {attr_name}: {ts_type};")
 
-            param_type = "any"
-            try:
-                if param_name in hints:
-                    param_type = _get_ts_type(hints[param_name])
-            except (TypeError, NameError):
-                pass
+    # Add declared methods (not including inherited methods)
+    for name, method in inspect.getmembers(cls, inspect.isfunction):
+        if name.startswith('_') and name != '__init__':
+            continue  # Skip private/special methods
 
-            # Handle default values - use `is not` instead of `!=`
-            try:
-                has_default = param.default is not param.empty
-            except (TypeError, AttributeError):
-                has_default = False
-
-            if has_default:
-                default_value = param.default
-                if default_value is None:
-                    default_str = "null"
-                elif default_value is False:
-                    default_str = "false"
-                elif default_value is True:
-                    default_str = "true"
-                elif isinstance(default_value, (int, float)):
-                    default_str = str(default_value)
-                elif isinstance(default_value, str):
-                    default_str = f"'{default_value}'"
-                elif isinstance(default_value, (list, dict, set, tuple)):
-                    if not default_value:  # Empty container
-                        if isinstance(default_value, list):
-                            default_str = "[]"
-                        elif isinstance(default_value, dict):
-                            default_str = "{}"
-                        elif isinstance(default_value, set):
-                            default_str = "new Set()"
-                        elif isinstance(default_value, tuple):
-                            default_str = "[]"
-                    else:
-                        # For non-empty containers, it's safer to use undefined
-                        default_str = "undefined"
-                else:
-                    # For any other type, use undefined
-                    default_str = "undefined"
-
-                # Add as optional parameter with default
-                constructor_params.append(f"{param_name}: {param_type} = {default_str}")
-
-                # Store parameter in constructor args and as instance property
-                constructor_body.append(f"    this._constructorArgs['{param_name}'] = {param_name};")
-                constructor_body.append(f"    this.{param_name} = {param_name}{' || null' if param_type.endswith('| null') else ''};")
-            else:
-                # Required parameter
-                constructor_params.append(f"{param_name}: {param_type}")
-
-                # Store parameter in constructor args and as instance property
-                constructor_body.append(f"    this._constructorArgs['{param_name}'] = {param_name};")
-                constructor_body.append(f"    this.{param_name} = {param_name};")
-    else:
-        # Default constructor with no parameters if __init__ is not defined
-        constructor_params = []
-
-    # Add constructor to class
-    ts_class += f"  constructor({', '.join(constructor_params)}) {{\n"
-    ts_class += "\n".join(constructor_body) + "\n"
-    ts_class += "  }\n\n"
-
-    # Generate methods
-    for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
-        if name != '__init__' and not name.startswith('_'):  # Skip private methods and constructor
-            # Skip the method if it's decorated with @staticmethod or @classmethod
-            if hasattr(method, "__self__") and (method.__self__ is cls or isinstance(method.__self__, type)):
-                continue
-
-            # Get return type hint
-            return_type_hint = "any"
-            try:
-                hints = get_type_hints(method)
-                if "return" in hints:
-                    return_type_hint = _get_ts_type(hints["return"])
-            except (TypeError, NameError):
-                pass
-
-            # Get parameters
-            signature = inspect.signature(method)
-            param_list = []
-            args_dict = []
-
-            for param_name, param in signature.parameters.items():
-                if param_name == 'self':
-                    continue
-
-                # Try to get type from type hint
-                param_type = "any"
-                try:
-                    if param_name in hints:
-                        param_type = _get_ts_type(hints[param_name])
-                except (TypeError, NameError, KeyError):
-                    pass
-
-                # Handle special parameter kinds
-                if param_name == 'kwargs' or param.kind == param.VAR_KEYWORD:
-                    param_list.append(f"{param_name}?: any")
-                    continue
-
-                # Handle default values for optional parameters - use `is not` instead of `!=`
-                try:
-                    has_default = param.default is not param.empty
-                except (TypeError, AttributeError):
-                    has_default = False
-
-                if has_default:
-                    default_value = param.default
-                    if default_value is None:
-                        default_str = "null"
-                    elif default_value is False:
-                        default_str = "false"
-                    elif default_value is True:
-                        default_str = "true"
-                    elif isinstance(default_value, (int, float)):
-                        default_str = str(default_value)
-                    elif isinstance(default_value, str):
-                        default_str = f"'{default_value}'"
-                    else:
-                        # For complex types, just use empty arrays/objects
-                        if isinstance(default_value, list):
-                            default_str = "[]"
-                        elif isinstance(default_value, dict):
-                            default_str = "{}"
-                        else:
-                            default_str = "undefined"
-
-                    param_list.append(f"{param_name}: {param_type} = {default_str}")
-                else:
-                    param_list.append(f"{param_name}: {param_type}")
-
-                # Add parameter to args dictionary
-                args_dict.append(f"{param_name}: {param_name}")
-
-            # Generate method code
-            ts_class += f"  async {name}({', '.join(param_list)}): Promise<{return_type_hint}> {{\n"
-            ts_class += "    // This is where the real implementation would call the Python backend\n"
-            ts_class += f"    return this._callPythonMethod('{name}', {{{', '.join(args_dict)}}});\n"
-            ts_class += "  }\n\n"
-
-    # Close the class
-    ts_class += "}"
-    return ts_class
-
-def generate_ts_function(func) -> str:
-    """Generate a TypeScript function from a Python function."""
-    func_name = func.__name__
-
-    # Get return type hint
-    return_type_hint = "any"
-    try:
-        hints = get_type_hints(func)
-        if "return" in hints:
-            return_type_hint = _get_ts_type(hints["return"])
-    except (TypeError, NameError):
-        pass
-
-    # Get parameters
-    signature = inspect.signature(func)
-    param_list = []
-    args_dict = []
-
-    for param_name, param in signature.parameters.items():
-        # Try to get type from type hint
-        param_type = "any"
         try:
-            if param_name in hints:
-                param_type = _get_ts_type(hints[param_name])
-        except (TypeError, NameError, KeyError):
+            method_hints = get_type_hints(method)
+            params = list(inspect.signature(method).parameters.items())
+
+            if params and params[0][0] == 'self':
+                params = params[1:]  # Remove 'self' parameter
+
+            param_strings = []
+            for param_name, param in params:
+                if param_name in method_hints:
+                    param_type = python_type_to_ts(method_hints[param_name])
+                else:
+                    param_type = "any"
+
+                if param.default is not inspect.Parameter.empty:
+                    param_strings.append(f"{param_name}?: {param_type}")
+                else:
+                    param_strings.append(f"{param_name}: {param_type}")
+
+            return_type = "any"
+            if "return" in method_hints and method_hints["return"] is not type(None):
+                return_type = python_type_to_ts(method_hints["return"])
+
+            lines.append(f"  {name}({', '.join(param_strings)}): {return_type};")
+        except (TypeError, ValueError):
+            # Skip methods with invalid signatures
             pass
 
-        # Handle special parameter kinds
-        if param_name == 'kwargs' or param.kind == param.VAR_KEYWORD:
-            param_list.append(f"{param_name}?: any")
-            continue
+    lines.append("}")
+    return "\n".join(lines)
 
-        # Handle default values for optional parameters - use `is not` instead of `!=`
+def generate_ts_class(cls: Type) -> str:
+    """Generate TypeScript class from a Python class."""
+    class_name = cls.__name__
+    interface_name = f"I{class_name}"
+
+    # Check if this class has decorated methods
+    has_decorated_methods = False
+    for name, method in inspect.getmembers(cls, inspect.isfunction):
+        if getattr(method, '_pyflow_decorated', False):
+            has_decorated_methods = True
+            break
+
+    # If no decorated methods, use the simple class approach
+    if not has_decorated_methods and not getattr(cls, '_pyflow_decorated', False):
+        return f"""export class {class_name} implements {interface_name} {{
+  // This class has no decorated methods, only the interface is used
+}}"""
+
+    # Build the class string
+    lines = [f"export class {class_name} implements {interface_name} {{"]
+
+    # Add constructor
+    lines.append(f"  constructor(args: Partial<{interface_name}> = {{}}) {{")
+    lines.append("    Object.assign(this, args);")
+    lines.append("  }")
+
+    # Add decorated methods
+    for name, method in inspect.getmembers(cls, inspect.isfunction):
+        if name.startswith('_') and name != '__init__':
+            continue  # Skip private/special methods
+
+        if not getattr(method, '_pyflow_decorated', False) and name != '__init__':
+            continue  # Skip non-decorated methods
+
         try:
-            has_default = param.default is not param.empty
-        except (TypeError, AttributeError):
-            has_default = False
+            method_hints = get_type_hints(method)
+            params = list(inspect.signature(method).parameters.items())
 
-        if has_default:
-            default_value = param.default
-            if default_value is None:
-                default_str = "null"
-            elif default_value is False:
-                default_str = "false"
-            elif default_value is True:
-                default_str = "true"
-            elif isinstance(default_value, (int, float)):
-                default_str = str(default_value)
-            elif isinstance(default_value, str):
-                default_str = f"'{default_value}'"
-            else:
-                # For complex types, just use empty arrays/objects
-                if isinstance(default_value, list):
-                    default_str = "[]"
-                elif isinstance(default_value, dict):
-                    default_str = "{}"
+            if params and params[0][0] == 'self':
+                params = params[1:]  # Remove 'self' parameter
+
+            param_strings = []
+            param_names = []
+            for param_name, param in params:
+                if param_name in method_hints:
+                    param_type = python_type_to_ts(method_hints[param_name])
                 else:
-                    default_str = "undefined"
+                    param_type = "any"
 
-            param_list.append(f"{param_name}: {param_type} = {default_str}")
-        else:
-            param_list.append(f"{param_name}: {param_type}")
+                if param.default is not inspect.Parameter.empty:
+                    param_strings.append(f"{param_name}?: {param_type}")
+                else:
+                    param_strings.append(f"{param_name}: {param_type}")
 
-        # Add parameter to args dictionary
-        args_dict.append(f"{param_name}: {param_name}")
+                param_names.append(param_name)
 
-    # Generate function code
-    func_code = f"export async function {func_name}({', '.join(param_list)}): Promise<{return_type_hint}> {{\n"
-    func_code += f"  return pyflowRuntime.callFunction('{func.__module__}', '{func_name}', {{{', '.join(args_dict)}}});\n"
-    func_code += "}\n"
+            return_type = "any"
+            if "return" in method_hints and method_hints["return"] is not type(None):
+                return_type = python_type_to_ts(method_hints["return"])
 
-    return func_code
+            lines.append(f"  async {name}({', '.join(param_strings)}): Promise<{return_type}> {{")
+            lines.append(f"    return pyflowRuntime.callMethod(")
+            lines.append(f"      '{class_name}',")
+            lines.append(f"      '{name}',")
+            lines.append(f"      {{{', '.join(f'{pname}: {pname}' for pname in param_names)}}},")
+            lines.append(f"      {{}}")
+            lines.append(f"    );")
+            lines.append(f"  }}")
+            lines.append("")
+        except (TypeError, ValueError):
+            # Skip methods with invalid signatures
+            pass
+
+    lines.append(f"  static async createInstance(args: Partial<{interface_name}> = {{}}): Promise<{class_name}> {{")
+    lines.append(f"    const instance = new {class_name}(args);")
+    lines.append(f"    await pyflowRuntime.createInstance('{class_name}', args);")
+    lines.append("    return instance;")
+    lines.append("  }")
+
+    lines.append("}")
+    return "\n".join(lines)
+
+def generate_ts_function(func) -> str:
+    """Generate TypeScript function from a Python function."""
+    func_name = func.__name__
+    module_name = func.__module__
+
+    try:
+        hints = get_type_hints(func)
+        params = list(inspect.signature(func).parameters.items())
+
+        param_strings = []
+        param_names = []
+        for param_name, param in params:
+            if param_name in hints:
+                param_type = python_type_to_ts(hints[param_name])
+            else:
+                param_type = "any"
+
+            if param.default is not inspect.Parameter.empty:
+                param_strings.append(f"{param_name}?: {param_type}")
+            else:
+                param_strings.append(f"{param_name}: {param_type}")
+
+            param_names.append(param_name)
+
+        return_type = "any"
+        if "return" in hints:
+            if hints["return"] is not type(None):
+                return_type = python_type_to_ts(hints["return"])
+
+        # Generate function docstring as comment
+        doc = inspect.getdoc(func)
+        doc_comment = ""
+        if doc:
+            lines = doc.split("\n")
+            doc_comment = "/**\n"
+            for line in lines:
+                doc_comment += f" * {line}\n"
+            doc_comment += " */\n"
+
+        return f"""{doc_comment}export async function {func_name}({', '.join(param_strings)}): Promise<{return_type}> {{
+  return pyflowRuntime.callFunction(
+    '{module_name}',
+    '{func_name}',
+    {{{', '.join(f'{pname}: {pname}' for pname in param_names)}}}
+  );
+}}"""
+    except Exception as e:
+        print(f"Error generating TypeScript function for {func_name}: {str(e)}")
+        return f"// Error generating TypeScript for function {func_name}: {str(e)}"
 
 def generate_ts_type(cls: Type) -> str:
-    """Generate TypeScript type definition for a Python class without implementation."""
-    return generate_ts_interface(cls)
+    """Generate TypeScript type definition for a class."""
+    # Simple interface generation for non-decorated classes
+    try:
+        class_name = cls.__name__
 
-# Aliases for backward compatibility
-python_type_to_ts_type = _get_ts_type
+        # Get type hints for class attributes
+        try:
+            attrs = get_type_hints(cls)
+        except (TypeError, NameError):
+            attrs = {}
+
+        # Add instance variables from __init__ method
+        if hasattr(cls, "__init__") and cls.__init__ is not object.__init__:
+            try:
+                init_hints = get_type_hints(cls.__init__)
+                # Remove 'self' and 'return'
+                init_hints.pop('self', None)
+                init_hints.pop('return', None)
+                # Merge with class attrs
+                attrs.update(init_hints)
+            except (TypeError, NameError):
+                pass
+
+        # Build the interface string
+        lines = [f"export interface I{class_name} {{"]
+
+        # Add attributes
+        for attr_name, attr_type in attrs.items():
+            if not attr_name.startswith('_'):  # Skip private attributes
+                ts_type = python_type_to_ts(attr_type)
+                lines.append(f"  {attr_name}: {ts_type};")
+
+        # Add declared methods (not including inherited methods)
+        for name, method in inspect.getmembers(cls, inspect.isfunction):
+            if name.startswith('_') and name != '__init__':
+                continue  # Skip private/special methods
+
+            try:
+                method_hints = get_type_hints(method)
+                params = list(inspect.signature(method).parameters.items())
+
+                if params and params[0][0] == 'self':
+                    params = params[1:]  # Remove 'self' parameter
+
+                param_strings = []
+                for param_name, param in params:
+                    if param_name in method_hints:
+                        param_type = python_type_to_ts(method_hints[param_name])
+                    else:
+                        param_type = "any"
+
+                    if param.default is not inspect.Parameter.empty:
+                        param_strings.append(f"{param_name}?: {param_type}")
+                    else:
+                        param_strings.append(f"{param_name}: {param_type}")
+
+                return_type = "any"
+                if "return" in method_hints and method_hints["return"] is not type(None):
+                    return_type = python_type_to_ts(method_hints["return"])
+
+                lines.append(f"  {name}({', '.join(param_strings)}): {return_type};")
+            except (TypeError, ValueError):
+                # Skip methods with invalid signatures
+                continue
+
+        lines.append("}")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"Error generating TypeScript type for {cls.__name__}: {str(e)}")
+        return f"// Error generating TypeScript type for {cls.__name__}: {str(e)}"

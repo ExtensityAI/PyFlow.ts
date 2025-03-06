@@ -11,7 +11,7 @@ from .inspect_utils import (
 )
 
 from .type_converter import (
-    python_type_to_ts_type,
+    python_type_to_ts,
     generate_ts_interface,
     generate_ts_class,
     generate_ts_function
@@ -23,7 +23,7 @@ __all__ = [
     "get_all_submodules",
     "get_function_details",
     "get_class_details",
-    "python_type_to_ts_type",
+    "python_type_to_ts",
     "generate_ts_interface",
     "generate_ts_class",
     "generate_ts_function"

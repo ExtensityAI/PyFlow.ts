@@ -9,7 +9,7 @@ import sys
 import tempfile
 from typing import List
 
-from .core import import_module_from_path, scan_directory
+from .core import import_module_from_path#, scan_directory
 from .generators.ts_generator import TypeScriptGenerator
 from .generators.api_generator import ApiGenerator
 from .generators.client_generator import ClientGenerator
@@ -515,18 +515,50 @@ def initialize_project(args):
         try:
             # Generate TypeScript code with custom host and port
             ts_generator = TypeScriptGenerator(output_path, host=host, port=port, debug=debug)
-            ts_generator.generate_all()
+
+            # Process modules, with additional error handling for web frameworks
+            ts_generator.generate_runtime()
+
+            successful_modules = 0
+            failed_modules = []
+
+            for module_name in modules:
+                try:
+                    ts_generator.generate_module(module_name)
+                    successful_modules += 1
+                except Exception as e:
+                    print(f"Warning: Error generating code for module {module_name}: {str(e)}")
+                    # Don't stop for web framework errors
+                    if "request context" in str(e).lower():
+                        print("This is likely due to a web framework (Flask/Django) integration.")
+                        print("Some functionality might be limited for this module.")
+                    failed_modules.append(module_name)
+
+            if failed_modules:
+                print(f"\nProcessed {successful_modules} modules successfully.")
+                print(f"Had issues with {len(failed_modules)} modules: {', '.join(failed_modules)}")
+                print("You may still be able to use the successfully processed modules.")
+
+            # Generate index files for organization
+            try:
+                ts_generator.generate_index()
+            except Exception as e:
+                print(f"Warning: Error generating index files: {e}")
 
             # Generate API
-            api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
-            api_generator.generate_api()
+            try:
+                api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
+                api_generator.generate_api()
+            except Exception as e:
+                print(f"Warning: Error generating API: {e}")
+                print("You may need to run the API generation step separately.")
 
             # Generate client code
-            client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
-            client_generator.generate_all()
-
-            # Generate an aggregation index file at the root level
-            generate_root_index(output_path, modules)
+            try:
+                client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
+                client_generator.generate_all()
+            except Exception as e:
+                print(f"Warning: Error generating client code: {e}")
         except Exception as e:
             print(f"Warning: Error during code generation: {e}")
             import traceback
