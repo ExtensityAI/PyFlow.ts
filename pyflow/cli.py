@@ -400,196 +400,203 @@ def run():
 
 def initialize_project(args):
     """Initialize a new PyFlow.ts project with TypeScript setup."""
-    # Get module path and remove trailing slashes
-    module_path = args.module.rstrip('/')
-    output_dir = args.output
-    port = getattr(args, "port", 8000)
-    host = getattr(args, "host", "localhost")
-    reload = getattr(args, "reload", False)
-    debug = getattr(args, "debug", False)
+    # Store original sys.argv to prevent command-line parsing conflicts
+    original_argv = sys.argv.copy()
 
-    # Create output directory
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    try:
+        # Temporarily clear command-line args to prevent conflicts
+        sys.argv = [sys.argv[0]]
 
-    # Check if input is a directory
-    is_directory = os.path.isdir(module_path)
+        # Get module path and remove trailing slashes
+        module_path = args.module.rstrip('/')
+        output_dir = args.output
+        port = getattr(args, "port", 8000)
+        host = getattr(args, "host", "localhost")
+        reload = getattr(args, "reload", False)
+        debug = getattr(args, "debug", False)
 
-    if is_directory:
-        print(f"Initializing PyFlow.ts project for directory: {module_path}")
-    else:
-        print(f"Initializing PyFlow.ts project for module: {module_path}")
+        # Create output directory
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Scan and import modules
-    print("Scanning for PyFlow.ts-decorated items...")
+        # Check if input is a directory
+        is_directory = os.path.isdir(module_path)
 
-    if is_directory:
-        # Convert to absolute path to avoid relative path issues
-        abs_module_path = os.path.abspath(module_path)
-        print(f"Scanning directory: {abs_module_path}")
-
-        # Add the parent directory to sys.path temporarily to ensure correct imports
-        parent_dir = os.path.dirname(abs_module_path)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-            path_added = True
+        if is_directory:
+            print(f"Initializing PyFlow.ts project for directory: {module_path}")
         else:
-            path_added = False
+            print(f"Initializing PyFlow.ts project for module: {module_path}")
 
-        try:
-            # Get just the directory name without path for proper module naming
-            dir_name = os.path.basename(abs_module_path)
-            # Scan recursively for all Python modules in the directory
-            modules = scan_directory(abs_module_path)
+        # Step 1: Scan and import modules
+        print("Scanning for PyFlow.ts-decorated items...")
 
-            # If no modules found, provide more information
-            if not modules:
-                print("⚠️ No PyFlow.ts-decorated modules found. Make sure your Python files contain @extensity decorators.")
-                print("Checking for Python files...")
-                # List all Python files for debugging
-                python_files = []
-                for root, _, files in os.walk(abs_module_path):
-                    for file in files:
-                        if file.endswith('.py') and not file.startswith('__'):
-                            rel_path = os.path.relpath(os.path.join(root, file), abs_module_path)
-                            python_files.append(rel_path)
+        if is_directory:
+            # Convert to absolute path to avoid relative path issues
+            abs_module_path = os.path.abspath(module_path)
+            print(f"Scanning directory: {abs_module_path}")
 
-                if python_files:
-                    print(f"Found {len(python_files)} Python files: {', '.join(python_files)}")
-                    print("Make sure these files contain @extensity decorators on functions or classes.")
+            # Add the parent directory to sys.path temporarily to ensure correct imports
+            parent_dir = os.path.dirname(abs_module_path)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+                path_added = True
+            else:
+                path_added = False
+
+            try:
+                # Get just the directory name without path for proper module naming
+                dir_name = os.path.basename(abs_module_path)
+                # Scan recursively for all Python modules in the directory
+                modules = scan_directory(abs_module_path)
+
+                # If no modules found, provide more information
+                if not modules:
+                    print("⚠️ No PyFlow.ts-decorated modules found. Make sure your Python files contain @extensity decorators.")
+                    print("Checking for Python files...")
+                    # List all Python files for debugging
+                    python_files = []
+                    for root, _, files in os.walk(abs_module_path):
+                        for file in files:
+                            if file.endswith('.py') and not file.startswith('__'):
+                                rel_path = os.path.relpath(os.path.join(root, file), abs_module_path)
+                                python_files.append(rel_path)
+
+                    if python_files:
+                        print(f"Found {len(python_files)} Python files: {', '.join(python_files)}")
+                        print("Make sure these files contain @extensity decorators on functions or classes.")
+                    else:
+                        print("No Python files found in the directory.")
+
+                # Determine project name from directory name
+                if args.name:
+                    project_name = args.name
                 else:
-                    print("No Python files found in the directory.")
+                    project_name = os.path.basename(abs_module_path)
+            finally:
+                # Remove directory from path if we added it
+                if path_added and parent_dir in sys.path:
+                    sys.path.remove(parent_dir)
 
-            # Determine project name from directory name
+            # Store original path for reference in scripts
+            module_path_for_scripts = abs_module_path
+        else:
+            # It's a single module
+            # Handle case with slashes (file path)
+            if '/' in module_path:
+                abs_module_path = os.path.abspath(module_path)
+                module_path_for_import = module_path.replace('/', '.').replace('.py', '')
+            else:
+                abs_module_path = module_path
+                module_path_for_import = module_path
+
+            print(f"Processing module: {module_path_for_import}")
+            modules = [module_path_for_import]
+            try:
+                module = import_module_from_path(module_path_for_import)
+            except Exception as e:
+                print(f"Warning: Error importing module {module_path_for_import}: {e}")
+                print("Will continue with setup but code generation may be incomplete.")
+
+            # Determine project name from module name
             if args.name:
                 project_name = args.name
             else:
-                project_name = os.path.basename(abs_module_path)
-        finally:
-            # Remove directory from path if we added it
-            if path_added and parent_dir in sys.path:
-                sys.path.remove(parent_dir)
+                project_name = os.path.splitext(os.path.basename(module_path))[0]
 
-        # Store original path for reference in scripts
-        module_path_for_scripts = abs_module_path
-    else:
-        # It's a single module
-        # Handle case with slashes (file path)
-        if '/' in module_path:
-            abs_module_path = os.path.abspath(module_path)
-            module_path_for_import = module_path.replace('/', '.').replace('.py', '')
-        else:
-            abs_module_path = module_path
-            module_path_for_import = module_path
+            # Store original path for reference in scripts
+            module_path_for_scripts = module_path
+            module_path = module_path_for_import
 
-        print(f"Processing module: {module_path_for_import}")
-        modules = [module_path_for_import]
+        print(f"Found {len(modules)} modules to process")
+
+        # Step 2: Generate TypeScript code
+        print("Generating TypeScript code...")
+
         try:
-            module = import_module_from_path(module_path_for_import)
+            # Generate TypeScript code with custom host and port
+            ts_generator = TypeScriptGenerator(output_path, host=host, port=port, debug=debug)
+            ts_generator.generate_all()
+
+            # Generate API
+            api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
+            api_generator.generate_api()
+
+            # Generate client code
+            client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
+            client_generator.generate_all()
+
+            # Generate an aggregation index file at the root level
+            generate_root_index(output_path, modules)
         except Exception as e:
-            print(f"Warning: Error importing module {module_path_for_import}: {e}")
-            print("Will continue with setup but code generation may be incomplete.")
+            print(f"Warning: Error during code generation: {e}")
+            import traceback
+            print(traceback.format_exc())
+            print("Continuing with project setup...")
 
-        # Determine project name from module name
-        if args.name:
-            project_name = args.name
+        # Step 3: Create package.json with proper scripts
+        print("Creating package.json...")
+
+        # For directories, the script should point to the directory path
+        if is_directory:
+            server_script = f"pyflow run -m {module_path_for_scripts} --port {args.port}"
         else:
-            project_name = os.path.splitext(os.path.basename(module_path))[0]
+            server_script = f"pyflow run -m {module_path} --port {args.port}"
 
-        # Store original path for reference in scripts
-        module_path_for_scripts = module_path
-        module_path = module_path_for_import
-
-    print(f"Found {len(modules)} modules to process")
-
-    # Step 2: Generate TypeScript code
-    print("Generating TypeScript code...")
-
-    try:
-        # Generate TypeScript code with custom host and port
-        ts_generator = TypeScriptGenerator(output_path, host=host, port=port, debug=debug)
-        ts_generator.generate_all()
-
-        # Generate API
-        api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
-        api_generator.generate_api()
-
-        # Generate client code
-        client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
-        client_generator.generate_all()
-
-        # Generate an aggregation index file at the root level
-        generate_root_index(output_path, modules)
-    except Exception as e:
-        print(f"Warning: Error during code generation: {e}")
-        import traceback
-        print(traceback.format_exc())
-        print("Continuing with project setup...")
-
-    # Step 3: Create package.json with proper scripts
-    print("Creating package.json...")
-
-    # For directories, the script should point to the directory path
-    if is_directory:
-        server_script = f"pyflow run -m {module_path_for_scripts} --port {args.port}"
-    else:
-        server_script = f"pyflow run -m {module_path} --port {args.port}"
-
-    package_json = {
-        "name": f"pyflow-ts-{project_name}",
-        "version": "0.1.0",
-        "description": f"PyFlow.ts project for {project_name}",
-        "type": "module",
-        "scripts": {
-            "start-server": server_script,
-            "start-ts": "tsc --watch",
-            "start": "concurrently \"npm run start-server\" \"npm run start-ts\"",
-            "build": "tsc",
-            "serve": "node dist/index.js",
-            "dev": "ts-node --esm src/index.ts"
-        },
-        "dependencies": {
-            "node-fetch": "^3.3.1"
-        },
-        "devDependencies": {
-            "concurrently": "^8.0.1",
-            "ts-node": "^10.9.1",
-            "typescript": "^5.0.4"
+        package_json = {
+            "name": f"pyflow-ts-{project_name}",
+            "version": "0.1.0",
+            "description": f"PyFlow.ts project for {project_name}",
+            "type": "module",
+            "scripts": {
+                "start-server": server_script,
+                "start-ts": "tsc --watch",
+                "start": "concurrently \"npm run start-server\" \"npm run start-ts\"",
+                "build": "tsc",
+                "serve": "node dist/index.js",
+                "dev": "ts-node --esm src/index.ts"
+            },
+            "dependencies": {
+                "node-fetch": "^3.3.1"
+            },
+            "devDependencies": {
+                "concurrently": "^8.0.1",
+                "ts-node": "^10.9.1",
+                "typescript": "^5.0.4"
+            }
         }
-    }
 
-    with open(os.path.join(output_path, "package.json"), "w") as f:
-        json.dump(package_json, f, indent=2)
+        with open(os.path.join(output_path, "package.json"), "w") as f:
+            json.dump(package_json, f, indent=2)
 
-    # Step 4: Create tsconfig.json with proper ESM configuration
-    print("Creating tsconfig.json...")
-    tsconfig_json = {
-        "compilerOptions": {
-            "target": "ES2020",
-            "module": "NodeNext",
-            "moduleResolution": "NodeNext",
-            "esModuleInterop": True,
-            "allowSyntheticDefaultImports": True,
-            "strict": True,
-            "outDir": "dist",
-            "declaration": True,
-            "skipLibCheck": True,
-            "noEmitOnError": False,  # Keep generating output even with errors
-            "baseUrl": "."
-        },
-        "include": ["src/**/*.ts"],
-        "exclude": ["node_modules", "dist"]
-    }
+        # Step 4: Create tsconfig.json with proper ESM configuration
+        print("Creating tsconfig.json...")
+        tsconfig_json = {
+            "compilerOptions": {
+                "target": "ES2020",
+                "module": "NodeNext",
+                "moduleResolution": "NodeNext",
+                "esModuleInterop": True,
+                "allowSyntheticDefaultImports": True,
+                "strict": True,
+                "outDir": "dist",
+                "declaration": True,
+                "skipLibCheck": True,
+                "noEmitOnError": False,  # Keep generating output even with errors
+                "baseUrl": "."
+            },
+            "include": ["src/**/*.ts"],
+            "exclude": ["node_modules", "dist"]
+        }
 
-    with open(os.path.join(output_path, "tsconfig.json"), "w") as f:
-        json.dump(tsconfig_json, f, indent=2)
+        with open(os.path.join(output_path, "tsconfig.json"), "w") as f:
+            json.dump(tsconfig_json, f, indent=2)
 
-    # Step 5: Create src directory and index.ts
-    src_dir = output_path / "src"
-    src_dir.mkdir(exist_ok=True)
+        # Step 5: Create src directory and index.ts
+        src_dir = output_path / "src"
+        src_dir.mkdir(exist_ok=True)
 
-    # Create a sample index.ts file that imports from our root aggregation file
-    index_ts = """// Example usage of PyFlow.ts-generated TypeScript
+        # Create a sample index.ts file that imports from our root aggregation file
+        index_ts = """// Example usage of PyFlow.ts-generated TypeScript
 
 // For Node.js < 18, uncomment this line if needed:
 // import fetch from 'node-fetch';
@@ -631,12 +638,12 @@ main().catch(error => {
 });
 """
 
-    with open(os.path.join(src_dir, "index.ts"), "w") as f:
-        f.write(index_ts)
+        with open(os.path.join(src_dir, "index.ts"), "w") as f:
+            f.write(index_ts)
 
-    # Step 6: Create README.md with updated instructions
-    print("Creating README.md...")
-    readme_md = f"""# PyFlow.ts Project: {project_name}
+        # Step 6: Create README.md with updated instructions
+        print("Creating README.md...")
+        readme_md = f"""# PyFlow.ts Project: {project_name}
 
 This project was automatically generated with PyFlow.ts.
 
@@ -712,20 +719,20 @@ If your TypeScript code can't connect to the Python server:
 - `npm run dev`: Run TypeScript directly with ts-node
 """
 
-    with open(os.path.join(output_path, "README.md"), "w") as f:
-        f.write(readme_md)
+        with open(os.path.join(output_path, "README.md"), "w") as f:
+            f.write(readme_md)
 
-    # Step 7: Install npm dependencies
-    print("Installing npm dependencies...")
-    try:
-        subprocess.run(["npm", "install"], cwd=output_path, check=True)
-        print("✅ npm dependencies installed successfully")
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        print(f"⚠️ Could not install npm dependencies: {e}")
-        print("Please run 'npm install' in the output directory manually")
+        # Step 7: Install npm dependencies
+        print("Installing npm dependencies...")
+        try:
+            subprocess.run(["npm", "install"], cwd=output_path, check=True)
+            print("✅ npm dependencies installed successfully")
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            print(f"⚠️ Could not install npm dependencies: {e}")
+            print("Please run 'npm install' in the output directory manually")
 
-    # Final output message with clearer instructions
-    print(f"""
+        # Final output message with clearer instructions
+        print(f"""
 ✨ PyFlow.ts project initialized successfully! ✨
 
 Your project is now ready in: {output_path}
@@ -748,6 +755,10 @@ To test your TypeScript code:
 
 See the README.md file for more information.
 """)
+
+    finally:
+        # Restore original command line arguments
+        sys.argv = original_argv
 
 def generate_root_index(output_dir: Path, modules: list) -> None:
     """Generate a root index.ts file that aggregates exports from all modules."""
@@ -799,12 +810,21 @@ def scan_directory(directory_path: str) -> List[str]:
     """
     from pyflow.core import registry
     imported_modules = []
+    failed_imports = []
+    retry_queue = []
 
     # Convert to absolute path
     abs_path = os.path.abspath(directory_path)
     print(f"Scanning directory: {abs_path}")
 
-    # Add directory to Python path temporarily
+    # Add directory and parent directory to Python path temporarily
+    parent_dir = os.path.dirname(abs_path)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+        parent_added = True
+    else:
+        parent_added = False
+
     if abs_path not in sys.path:
         sys.path.insert(0, abs_path)
         path_added = True
@@ -815,7 +835,24 @@ def scan_directory(directory_path: str) -> List[str]:
         # Get the directory name for proper module naming
         dir_name = os.path.basename(abs_path)
 
-        # Walk the directory
+        # Add empty __init__.py files to directories without them to enable relative imports
+        for root, dirs, files in os.walk(abs_path):
+            # Only add __init__.py if this is a directory we might import from
+            if not any(ignore in root for ignore in ('generated', '__pycache__')):
+                # Check if __init__.py is missing
+                init_file = os.path.join(root, "__init__.py")
+                if not os.path.exists(init_file):
+                    try:
+                        # Create an empty __init__.py file to make it a proper package
+                        with open(init_file, 'w') as f:
+                            f.write("# Auto-generated by PyFlow.ts for package structure\n")
+                        print(f"Created package __init__.py: {init_file}")
+                    except (IOError, PermissionError) as e:
+                        print(f"Warning: Could not create __init__.py in {root}: {e}")
+                        # Continue without creating the file
+
+        # Collect all Python files first
+        python_files = []
         for root, dirs, files in os.walk(abs_path):
             # Skip generated directories and __pycache__
             if 'generated' in root or '__pycache__' in root:
@@ -828,121 +865,245 @@ def scan_directory(directory_path: str) -> List[str]:
             for file in files:
                 if file.endswith('.py') and not file.startswith('__'):
                     file_path = os.path.join(root, file)
-                    print(f"Checking file: {file_path}")
-
-                    # Get the module name
                     module_name = os.path.splitext(file)[0]
 
                     if rel_path == '.':
-                        # Files in the root directory
-                        full_module_name = module_name
+                        module_options = [
+                            module_name,                  # Direct module
+                            f"{dir_name}.{module_name}"   # As submodule of directory
+                        ]
                     else:
-                        # Files in subdirectories
                         package_path = rel_path.replace(os.path.sep, '.')
-                        full_module_name = f"{package_path}.{module_name}"
+                        module_options = [
+                            f"{package_path}.{module_name}",         # Just the relative path
+                            f"{dir_name}.{package_path}.{module_name}"  # With directory prefix
+                        ]
 
-                    try:
-                        # Import the module
-                        initial_count = len(registry.modules)
-                        module = importlib.import_module(full_module_name)
+                    python_files.append((file_path, module_options))
 
-                        # Check if this module contributed decorators to the registry
-                        if len(registry.modules) > initial_count:
-                            imported_modules.append(full_module_name)
-                            print(f"✅ Imported module with @extensity decorators: {full_module_name}")
-                        else:
-                            print(f"⚠️ No @extensity decorators found in module: {full_module_name}")
-                    except Exception as e:
-                        print(f"Error importing module {full_module_name}: {e}")
+        # Process files - first pass
+        for file_path, module_options in python_files:
+            print(f"Checking file: {file_path}")
+            try_import(file_path, module_options, imported_modules, failed_imports, retry_queue)
 
+        # Retry failed imports - they might depend on modules we've now imported
+        if retry_queue:
+            print("\n🔄 Retrying imports that failed on first pass...")
+            for file_path, module_options in retry_queue:
+                print(f"Retrying: {file_path}")
+                try_import(file_path, module_options, imported_modules, failed_imports, [])
+
+        if failed_imports:
+            print(f"\n⚠️ {len(failed_imports)} files could not be imported successfully")
+
+        # Display PyFlow.ts statistics
+        module_count = len(registry.modules)
+        func_count = len(registry.functions)
+        class_count = len(registry.classes)
+
+        if module_count > 0:
+            print(f"\n✅ Found {module_count} modules with PyFlow.ts decorators")
+            print(f"   - {func_count} decorated functions")
+            print(f"   - {class_count} decorated classes")
+        else:
+            print("\n❌ No PyFlow.ts decorators found in any modules")
+            print("   Make sure you've added @extensity decorators to your functions or classes")
+
+    # Add specific handling for the conflicting pyflow package issue
+    except Exception as e:
+        if "unrecognized arguments" in str(e) and "pyflow" in str(e):
+            print("\n❌ ERROR: Detected name conflict with another 'pyflow' package")
+            print("   This usually happens when a module you're importing is using a different 'pyflow' package.")
+            print("   To fix this, you might need to:")
+            print("   1. Check if you have multiple pyflow packages installed")
+            print("   2. Check if any of your modules are importing a different pyflow package")
+            print("   3. Try using a virtual environment for PyFlow.ts")
+            print("   4. Rename your conflicting package\n")
+        else:
+            print(f"\n❌ Unexpected error during scanning: {e}")
+            import traceback
+            print(traceback.format_exc())
     finally:
-        # Remove directory from Python path if we added it
+        # Remove directories from Python path
         if path_added and abs_path in sys.path:
             sys.path.remove(abs_path)
+        if parent_added and parent_dir in sys.path:
+            sys.path.remove(parent_dir)
 
     return imported_modules
 
-def run_generated_server(module_path, modules, host, port, generated_dir=None, reload=False, debug=False):
-    """Run the generated server code or generate it on demand."""
-    # First check if module_path contains a generated directory with _server
-    if os.path.isdir(module_path):
-        if generated_dir is None:
-            potential_server_dir = os.path.join(module_path, "generated", "_server")
-        else:
-            potential_server_dir = os.path.join(generated_dir, "_server")
-        # Check if the directory exists
-        if os.path.isdir(potential_server_dir):
-            generated_dir = Path(potential_server_dir)
-            print(f"Found existing server code in {potential_server_dir}")
+def try_import(file_path, module_options, imported_modules, failed_imports, retry_queue):
+    """Helper function to try importing a module with various strategies."""
+    from pyflow.core import registry
 
-        # Also check if there's directly a _server directory
-        if os.path.isdir(potential_server_dir) and not generated_dir:
-            generated_dir = Path(potential_server_dir)
-            print(f"Found existing server code in {potential_server_dir}")
+    # Store original sys.argv to restore it later
+    original_argv = sys.argv.copy()
 
-    # If not found, generate a temporary server
-    if not generated_dir:
-        print("No existing server code found, generating temporary server...")
-        # Create a temporary output directory
-        temp_dir = Path(tempfile.mkdtemp())
-        temp_server_dir = temp_dir / "_server"
+    try:
+        # First, try to empty sys.argv to avoid argument parsing issues
+        # This helps when modules try to parse command line arguments
+        sys.argv = [sys.argv[0]]
 
-        try:
-            # Generate API code
-            api_generator = ApiGenerator(temp_server_dir, host=host, port=port, reload=reload, debug=debug)
-            api_generator.generate_api()
-            generated_dir = temp_server_dir
-            print(f"Generated temporary server code in {temp_server_dir}")
-        except Exception as e:
-            print(f"Error generating server code: {e}")
-            print("Falling back to direct execution mode")
-            generated_dir = None
-
-    # If we have generated code, use it
-    if generated_dir:
-        server_script = Path(generated_dir) / "server.py"
-
-        if server_script.exists():
-            print(f"Running generated server from {server_script}")
-
-            # Add the directory to sys.path temporarily
-            server_dir = str(generated_dir)
-            if server_dir not in sys.path:
-                sys.path.insert(0, server_dir)
+        imported = False
+        for full_module_name in module_options:
+            if imported:
+                break
 
             try:
-                # First import any modules to ensure they're processed
-                if modules:
-                    for module_name in modules:
-                        try:
-                            importlib.import_module(module_name)
-                        except ImportError as e:
-                            print(f"Warning: Could not import module {module_name}: {e}")
+                # Import the module
+                initial_count = len(registry.modules)
 
-                # Import and run the generated server
-                sys.path.insert(0, str(generated_dir.parent))  # Add parent dir to path
-                server_module = importlib.import_module(f"_server.server")
+                # Try standard import first
+                try:
+                    module = importlib.import_module(full_module_name)
+                    imported = True
+                except (ModuleNotFoundError, ImportError) as e:
+                    # If that fails, try spec_from_file_location
+                    try:
+                        spec = importlib.util.spec_from_file_location(full_module_name, file_path)
+                        if spec and spec.loader:
+                            module = importlib.util.module_from_spec(spec)
+                            sys.modules[full_module_name] = module
+                            spec.loader.exec_module(module)
+                            imported = True
+                    except Exception:
+                        continue  # Try next module name option
 
-                # Call the start_server function
-                if hasattr(server_module, "start_server"):
-                    print(f"Starting server on {host}:{port} (reload={reload}, debug={debug})")
-                    server_module.start_server(host=host, port=port, reload=reload, debug=debug)
-                else:
-                    # Fallback to running the module directly
-                    print("Using fallback server execution method")
-                    subprocess.run([sys.executable, str(server_script),
-                                   f"--host={host}", f"--port={port}",
-                                   *(["--reload"] if reload else []),
-                                   *(["--debug"] if debug else [])])
+                # Check if this module contributed decorators to the registry
+                if imported and len(registry.modules) > initial_count:
+                    imported_modules.append(full_module_name)
+                    print(f"✅ Imported module with @extensity decorators: {full_module_name}")
+                    break  # Successfully imported, no need to try other options
+                elif imported:
+                    print(f"⚠️ No @extensity decorators found in module: {full_module_name}")
+                    break  # Module imported but no decorators, no need to try other options
+
             except Exception as e:
-                print(f"Error running server: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.exit(1)
-            return
+                # Check if this is a missing name error that might be resolved on a retry
+                error_str = str(e)
+                if "name '" in error_str and "' is not defined" in error_str:
+                    # Add to retry queue - we'll try again after other modules are loaded
+                    if file_path not in [x[0] for x in retry_queue]:
+                        retry_queue.append((file_path, module_options))
+                        print(f"⏳ Queuing for retry - dependency issue: {error_str}")
+                else:
+                    print(f"Error importing module {full_module_name}: {e}")
 
-    # If we reach here, something went wrong with the generated server
-    print("Error: Could not find or run the generated server code")
-    sys.exit(1)
+        # If we couldn't import with any strategy, report it
+        if not imported:
+            print(f"❌ Failed to import module from {file_path}")
+            failed_imports.append(file_path)
+
+    finally:
+        # Restore original sys.argv
+        sys.argv = original_argv
+
+def run_generated_server(module_path, modules, host, port, generated_dir=None, reload=False, debug=False):
+    """Run the generated server code or generate it on demand."""
+    # Prevent command line parsing conflicts by emptying sys.argv temporarily
+    original_argv = sys.argv.copy()
+    sys.argv = [sys.argv[0]]
+
+    try:
+        # First check if module_path contains a generated directory with _server
+        if os.path.isdir(module_path):
+            if generated_dir is None:
+                potential_server_dir = os.path.join(module_path, "generated", "_server")
+            else:
+                potential_server_dir = os.path.join(generated_dir, "_server")
+            # Check if the directory exists
+            if os.path.isdir(potential_server_dir):
+                generated_dir = Path(potential_server_dir)
+                print(f"Found existing server code in {potential_server_dir}")
+
+            # Also check if there's directly a _server directory
+            if os.path.isdir(potential_server_dir) and not generated_dir:
+                generated_dir = Path(potential_server_dir)
+                print(f"Found existing server code in {potential_server_dir}")
+
+        # If not found, generate a temporary server
+        if not generated_dir:
+            print("No existing server code found, generating temporary server...")
+            # Create a temporary output directory
+            temp_dir = Path(tempfile.mkdtemp())
+            temp_server_dir = temp_dir / "_server"
+
+            try:
+                # Generate API code
+                api_generator = ApiGenerator(temp_server_dir, host=host, port=port, reload=reload, debug=debug)
+                api_generator.generate_api()
+                generated_dir = temp_server_dir
+                print(f"Generated temporary server code in {temp_server_dir}")
+            except Exception as e:
+                print(f"Error generating server code: {e}")
+                print("Falling back to direct execution mode")
+                generated_dir = None
+
+        # If we have generated code, use it
+        if generated_dir:
+            server_script = Path(generated_dir) / "server.py"
+
+            if server_script.exists():
+                print(f"Running generated server from {server_script}")
+
+                # Add the directory to sys.path temporarily
+                server_dir = str(generated_dir)
+                if server_dir not in sys.path:
+                    sys.path.insert(0, server_dir)
+
+                try:
+                    # First import any modules to ensure they're processed
+                    if modules:
+                        for module_name in modules:
+                            try:
+                                # Use a specialized import approach to avoid command line parsing
+                                spec = importlib.util.find_spec(module_name)
+                                if spec:
+                                    module = importlib.util.module_from_spec(spec)
+                                    spec.loader.exec_module(module)
+                                else:
+                                    print(f"Warning: Could not find module {module_name}")
+                            except ImportError as e:
+                                print(f"Warning: Could not import module {module_name}: {e}")
+
+                    # Import and run the generated server
+                    sys.path.insert(0, str(generated_dir.parent))  # Add parent dir to path
+
+                    # Use specialized import approach to avoid command line conflicts
+                    spec = importlib.util.spec_from_file_location("server", server_script)
+                    if spec and spec.loader:
+                        server_module = importlib.util.module_from_spec(spec)
+                        sys.modules["server"] = server_module
+                        spec.loader.exec_module(server_module)
+
+                        # Call the start_server function
+                        if hasattr(server_module, "start_server"):
+                            print(f"Starting server on {host}:{port} (reload={reload}, debug={debug})")
+                            server_module.start_server(host=host, port=port, reload=reload, debug=debug)
+                        else:
+                            # Fallback to running the module directly
+                            print("Using fallback server execution method")
+                            subprocess.run([sys.executable, str(server_script),
+                                        f"--host={host}", f"--port={port}",
+                                        *(["--reload"] if reload else []),
+                                        *(["--debug"] if debug else [])])
+                    else:
+                        raise ImportError(f"Could not load server module from {server_script}")
+
+                except Exception as e:
+                    print(f"Error running server: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    sys.exit(1)
+                return
+
+        # If we reach here, something went wrong with the generated server
+        print("Error: Could not find or run the generated server code")
+        sys.exit(1)
+
+    finally:
+        # Restore original command line arguments
+        sys.argv = original_argv
+
 if __name__ == "__main__":
     run()
