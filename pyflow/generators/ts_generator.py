@@ -166,14 +166,24 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
 
         print(f"Generated PyFlow.ts runtime at {runtime_path}")
 
-    def _get_classes_with_decorated_methods(self, module_name: str) -> List[Type]:
+    def _get_classes_with_decorated_methods(self, module_name: str, already_decorated_classes: Set[Type] = None) -> List[Type]:
         """
         Identify classes that have PyFlow.ts-decorated methods but aren't decorated themselves.
         Enhanced to better detect decorated methods and their containing classes.
+
+        Args:
+            module_name: The module to inspect
+            already_decorated_classes: Set of classes to exclude (already directly decorated)
         """
         try:
             module = importlib.import_module(module_name)
             result = []
+
+            # Setup set of already decorated classes (to exclude)
+            if already_decorated_classes is None:
+                already_decorated_classes = set()
+
+            already_decorated_class_names = {cls.__name__ for cls in already_decorated_classes}
 
             # Track which classes have decorated methods
             classes_with_decorated_methods = set()
@@ -184,7 +194,7 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                     continue
 
                 # Skip if the class itself is decorated
-                if getattr(cls, '_pyflow_decorated', False):
+                if getattr(cls, '_pyflow_decorated', False) or cls in already_decorated_classes or cls.__name__ in already_decorated_class_names:
                     continue
 
                 # Check if any methods are decorated
@@ -209,14 +219,18 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                         if cls.__module__ == module_name and hasattr(cls, func.__name__):
                             method = getattr(cls, func.__name__)
                             if method.__code__ is func.__code__:
-                                classes_with_decorated_methods.add(cls)
-                                break
+                                # Only add if not already directly decorated
+                                if (not getattr(cls, '_pyflow_decorated', False) and
+                                    cls not in already_decorated_classes and
+                                    cls.__name__ not in already_decorated_class_names):
+                                    classes_with_decorated_methods.add(cls)
+                                    break
 
             # Add classes from registry that have decorated methods
             for class_name, class_info in registry.classes.items():
                 if class_info['module'] == module_name:
                     cls = class_info.get('cls', None)
-                    if cls and not getattr(cls, '_pyflow_decorated', False):
+                    if cls and not getattr(cls, '_pyflow_decorated', False) and cls not in already_decorated_classes:
                         # Check if this class has any decorated methods
                         for method_name, method_info in class_info.get('methods', {}).items():
                             if method_info.get('method') and getattr(method_info.get('method'), '_pyflow_decorated', False):
@@ -277,17 +291,6 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                 else:
                     raise
 
-            # Find classes with decorated methods
-            classes_with_decorated_methods = []
-            if not is_web_framework:  # Skip this for web framework modules
-                try:
-                    classes_with_decorated_methods = self._get_classes_with_decorated_methods(module_name)
-                except RuntimeError as e:
-                    if "request context" in str(e).lower():
-                        print(f"Skipping method detection for web framework module {module_name}")
-                    else:
-                        raise
-
             # Add decorated classes from registry
             for class_name, class_info in registry.classes.items():
                 if class_info['module'] == module_name:
@@ -295,6 +298,17 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                     if cls and cls not in decorated_classes:
                         decorated_classes.append(cls)
                         print(f"Added class from registry: {cls.__name__}")
+
+            # Find classes with decorated methods - pass decorated_classes to exclude them
+            classes_with_decorated_methods = []
+            if not is_web_framework:  # Skip this for web framework modules
+                try:
+                    classes_with_decorated_methods = self._get_classes_with_decorated_methods(module_name, set(decorated_classes))
+                except RuntimeError as e:
+                    if "request context" in str(e).lower():
+                        print(f"Skipping method detection for web framework module {module_name}")
+                    else:
+                        raise
 
             # Add decorated functions from registry
             for func_name, func_info in registry.functions.items():
@@ -329,6 +343,11 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                 print(f"No PyFlow.ts-decorated objects found in module {module_name}")
                 return
 
+            # Let's do a final check to make sure there's no overlap
+            decorated_class_names = {cls.__name__ for cls in decorated_classes}
+            classes_with_decorated_methods = [cls for cls in classes_with_decorated_methods
+                                              if cls.__name__ not in decorated_class_names]
+
             # Log what we found
             print(f"Found in {module_name}:")
             print(f"  - {len(decorated_classes)} decorated classes")
@@ -345,13 +364,19 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
 import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
 
 """
+            # Track what we've already generated to avoid duplicates
+            generated_types = set()
 
             # Generate interfaces for referenced types first
             for cls in referenced_types:
                 try:
+                    if cls.__name__ in generated_types:
+                        continue  # Skip if already generated
+
                     type_code = generate_ts_type(cls)
                     if type_code.strip():  # Only add if there's actual content
                         ts_code += type_code + "\n\n"
+                        generated_types.add(cls.__name__)
                     else:
                         print(f"Warning: Empty type generated for {cls.__name__}")
                 except Exception as e:
@@ -360,13 +385,10 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
             # Generate interfaces and classes for decorated classes
             for cls in decorated_classes:
                 try:
-                    interface_code = generate_ts_interface(cls)
-                    class_code = generate_ts_class(cls)
+                    if cls.__name__ in generated_types:
+                        continue  # Skip if already generated
 
-                    if interface_code.strip():
-                        ts_code += interface_code + "\n\n"
-                    else:
-                        print(f"Warning: Empty interface generated for {cls.__name__}")
+                    class_code = generate_ts_class(cls)
 
                     if class_code.strip():
                         ts_code += class_code + "\n\n"
@@ -378,13 +400,10 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
             # Generate interfaces and classes for classes with decorated methods
             for cls in classes_with_decorated_methods:
                 try:
-                    interface_code = generate_ts_interface(cls)
-                    class_code = generate_ts_class(cls)
+                    if cls.__name__ in generated_types:
+                        continue  # Skip if already generated
 
-                    if interface_code.strip():
-                        ts_code += interface_code + "\n\n"
-                    else:
-                        print(f"Warning: Empty interface generated for method class {cls.__name__}")
+                    class_code = generate_ts_class(cls)
 
                     if class_code.strip():
                         ts_code += class_code + "\n\n"
