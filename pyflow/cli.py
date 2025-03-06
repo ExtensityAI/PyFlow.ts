@@ -895,6 +895,9 @@ def scan_directory(directory_path: str) -> List[str]:
 
         if failed_imports:
             print(f"\n⚠️ {len(failed_imports)} files could not be imported successfully")
+            # list file names for reference
+            for file_path in failed_imports:
+                print(f"   - {file_path}")
 
         # Display PyFlow.ts statistics
         module_count = len(registry.modules)
