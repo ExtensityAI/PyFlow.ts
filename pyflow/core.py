@@ -7,7 +7,7 @@ import importlib.util
 import sys
 import os
 from pathlib import Path
-from typing import Any, List, Callable, Type, get_type_hints
+from typing import Any, Callable, Type, get_type_hints
 
 # Global registry to track decorated items
 class Registry:

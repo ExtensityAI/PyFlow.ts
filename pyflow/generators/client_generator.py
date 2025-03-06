@@ -2,7 +2,6 @@
 Client code generator for PyFlow.ts.
 """
 from pathlib import Path
-from .ts_generator import TypeScriptGenerator
 
 class ClientGenerator:
     """Generate client code for accessing the PyFlow.ts API."""

@@ -2,7 +2,6 @@
 Type conversion utilities for PyFlow.ts.
 """
 import inspect
-import typing
 from typing import Any, Dict, List, Set, Tuple, Type, Union, Optional, get_type_hints
 import datetime as dt
 
@@ -176,15 +175,17 @@ def generate_ts_class(cls: Type) -> str:
     """Generate TypeScript class from a Python class."""
     class_name = cls.__name__
 
-    # Check if this class has decorated methods
+    # Check if this class has decorated methods or is itself decorated
     has_decorated_methods = False
+    is_class_decorated = getattr(cls, '_pyflow_decorated', False)
+
     for name, method in inspect.getmembers(cls, inspect.isfunction):
         if getattr(method, '_pyflow_decorated', False):
             has_decorated_methods = True
             break
 
-    # If no decorated methods, use the simple class approach
-    if not has_decorated_methods and not getattr(cls, '_pyflow_decorated', False):
+    # If no decorated methods and class not decorated, use the simple class approach
+    if not has_decorated_methods and not is_class_decorated:
         return f"""export class {class_name} {{
   // This class has no decorated methods, only the interface is used
 }}"""
@@ -245,7 +246,7 @@ def generate_ts_class(cls: Type) -> str:
     lines.append("  }")
     lines.append("")
 
-    # Add decorated methods
+    # Add methods
     for name, method in inspect.getmembers(cls, inspect.isfunction):
         if name.startswith('_') and name != '__init__':
             continue  # Skip private/special methods except __init__
@@ -277,8 +278,9 @@ def generate_ts_class(cls: Type) -> str:
             if "return" in method_hints and method_hints["return"] is not type(None):
                 return_type = python_type_to_ts(method_hints["return"])
 
-            # Generate method implementation based on whether it's decorated
-            if getattr(method, '_pyflow_decorated', False):
+            # If class is decorated or method is decorated, all instance methods should call the backend
+            # Only exclude static methods or other special cases
+            if is_class_decorated or getattr(method, '_pyflow_decorated', False):
                 lines.append(f"  async {name}({', '.join(param_strings)}): Promise<{return_type}> {{")
                 lines.append(f"    return pyflowRuntime.callMethod(")
                 lines.append(f"      '{class_name}',")
@@ -288,7 +290,7 @@ def generate_ts_class(cls: Type) -> str:
                 lines.append(f"    );")
                 lines.append(f"  }}")
             else:
-                # For non-decorated methods, provide a stub implementation
+                # For non-decorated methods in non-decorated classes, provide a stub implementation
                 lines.append(f"  {name}({', '.join(param_strings)}): {return_type} {{")
                 if return_type != "void":
                     lines.append(f"    throw new Error('Method {name} not implemented');")
@@ -299,6 +301,7 @@ def generate_ts_class(cls: Type) -> str:
             # Skip methods with invalid signatures
             pass
 
+    # Add createInstance static method
     lines.append(f"  static async createInstance(args: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
     lines.append(f"    const instance = new {class_name}(args);")
     lines.append(f"    await pyflowRuntime.createInstance('{class_name}', args);")

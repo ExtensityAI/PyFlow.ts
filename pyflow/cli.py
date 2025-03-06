@@ -9,7 +9,7 @@ import sys
 import tempfile
 from typing import List
 
-from .core import import_module_from_path#, scan_directory
+from .core import import_module_from_path
 from .generators.ts_generator import TypeScriptGenerator
 from .generators.api_generator import ApiGenerator
 from .generators.client_generator import ClientGenerator

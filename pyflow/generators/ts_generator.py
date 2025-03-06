@@ -8,7 +8,6 @@ from typing import List, Type, Set
 
 from ..core import registry
 from ..utils.type_converter import (
-    generate_ts_interface,
     generate_ts_class,
     generate_ts_function,
     generate_ts_type
