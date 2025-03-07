@@ -41,6 +41,9 @@ export interface PyFlowRuntime {{
 class DefaultPyFlowRuntime implements PyFlowRuntime {{
   apiUrl: string;
   debug: boolean;
+  connectionErrorCount: number = 0;
+  maxRetries: number = 3;
+  isPortAutoDetectionEnabled: boolean = true;
 
   // Track instances by class and object ID
   private instanceCache = new Map<string, string>();
@@ -62,6 +65,48 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     this.debugLog(`Initialized with API URL: ${{this.apiUrl}}`);
   }}
 
+  // Auto-detect API server port if the main port is unavailable
+  async detectApiPort(): Promise<boolean> {{
+    if (!this.isPortAutoDetectionEnabled) return false;
+
+    this.debugLog(`Attempting to detect API server port...`);
+
+    // Extract base URL and port from current apiUrl
+    const url = new URL(this.apiUrl);
+    const baseUrl = `${{url.protocol}}//${{url.hostname}}`;
+    const currentPort = parseInt(url.port);
+
+    // Try sequential ports
+    for (let portOffset = 0; portOffset < 10; portOffset++) {{
+      const portToTry = currentPort + portOffset;
+      const testUrl = `${{baseUrl}}:${{portToTry}}/api`;
+
+      try {{
+        this.debugLog(`Testing connection to ${{testUrl}}...`);
+        const response = await fetch(`${{testUrl}}`, {{
+          method: 'GET',
+          headers: {{ 'Content-Type': 'application/json' }},
+        }});
+
+        if (response.ok) {{
+          if (portOffset > 0) {{
+            this.debugLog(`Found API server at port ${{portToTry}}!`);
+            this.apiUrl = testUrl;
+            return true;
+          }} else {{
+            this.debugLog(`Connection successful on current port.`);
+            return false; // No change needed
+          }}
+        }}
+      }} catch (e) {{
+        // Continue trying next port
+      }}
+    }}
+
+    this.debugLog(`Could not find API server on any nearby ports.`);
+    return false;
+  }}
+
   async callFunction(moduleName: string, functionName: string, args: any): Promise<any> {{
     this.debugLog(`Calling function: ${{moduleName}}.${{functionName}}`, {{
       module: moduleName,
@@ -72,27 +117,54 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     // Convert any instance objects in args to their IDs
     const processedArgs = this.processArgs(args);
 
-    const response = await fetch(`${{this.apiUrl}}/call-function`, {{
-      method: 'POST',
-      headers: {{
-        'Content-Type': 'application/json',
-      }},
-      body: JSON.stringify({{
-        module: moduleName,
-        function: functionName,
-        args: processedArgs,
-      }}),
-    }});
+    try {{
+      const response = await fetch(`${{this.apiUrl}}/call-function`, {{
+        method: 'POST',
+        headers: {{
+          'Content-Type': 'application/json',
+        }},
+        body: JSON.stringify({{
+          module: moduleName,
+          function: functionName,
+          args: processedArgs,
+        }}),
+      }});
 
-    if (!response.ok) {{
-      const error = await response.text();
-      this.debugLog(`Error calling function: ${{error}}`);
-      throw new Error(`Failed to call Python function: ${{error}}`);
+      if (!response.ok) {{
+        const errorText = await response.text();
+        this.debugLog(`Error calling function: ${{errorText}}`);
+
+        // Try to parse as JSON to get structured error details
+        try {{
+          const errorDetails = JSON.parse(errorText);
+          throw new Error(`Failed to call Python function: ${{errorDetails.detail || errorText}}`);
+        }} catch (parseError) {{
+          // If not JSON, use text as is
+          throw new Error(`Failed to call Python function: ${{errorText}}`);
+        }}
+      }}
+
+      const data = await response.json();
+      this.debugLog(`Function result:`, data.result);
+      return data.result;
+    }} catch (error) {{
+      // Check for connection errors and attempt port detection
+      if (error instanceof Error && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {{
+        this.connectionErrorCount++;
+
+        if (this.connectionErrorCount <= this.maxRetries) {{
+          this.debugLog(`Connection error: ${{error.message}}. Attempting to detect correct port...`);
+          const portChanged = await this.detectApiPort();
+
+          if (portChanged) {{
+            this.debugLog(`Port detected, retrying function call with new URL: ${{this.apiUrl}}`);
+            return this.callFunction(moduleName, functionName, args);
+          }}
+        }}
+      }}
+
+      throw error;
     }}
-
-    const data = await response.json();
-    this.debugLog(`Function result:`, data.result);
-    return data.result;
   }}
 
   // Process arguments to handle objects with instance IDs
@@ -143,31 +215,57 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     // Ensure constructor args aren't undefined and process them
     const safeArgs = this.processArgs(constructorArgs || {{}});
 
-    const response = await fetch(`${{this.apiUrl}}/create-instance`, {{
-      method: 'POST',
-      headers: {{
-        'Content-Type': 'application/json',
-      }},
-      body: JSON.stringify({{
-        class: className,
-        constructor_args: safeArgs,
-      }}),
-    }});
+    try {{
+      const response = await fetch(`${{this.apiUrl}}/create-instance`, {{
+        method: 'POST',
+        headers: {{
+          'Content-Type': 'application/json',
+        }},
+        body: JSON.stringify({{
+          class: className,
+          constructor_args: safeArgs,
+        }}),
+      }});
 
-    if (!response.ok) {{
-      const error = await response.text();
-      this.debugLog(`Error creating instance: ${{error}}`);
-      throw new Error(`Failed to create instance: ${{error}}`);
+      if (!response.ok) {{
+        const errorText = await response.text();
+        this.debugLog(`Error creating instance: ${{errorText}}`);
+
+        // Try to parse error as JSON for structured error details
+        try {{
+          const errorDetails = JSON.parse(errorText);
+          throw new Error(`Failed to create instance: ${{errorDetails.detail || errorText}}`);
+        }} catch (parseError) {{
+          throw new Error(`Failed to create instance: ${{errorText}}`);
+        }}
+      }}
+
+      const data = await response.json();
+      const instanceId = data.instance_id;
+      this.debugLog(`Created instance with ID: ${{instanceId}}`);
+
+      // Store in the class-based cache - useful for some scenarios
+      this.instanceCache.set(className, instanceId);
+
+      return instanceId;
+    }} catch (error) {{
+      // Check for connection errors and attempt port detection
+      if (error instanceof Error && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {{
+        this.connectionErrorCount++;
+
+        if (this.connectionErrorCount <= this.maxRetries) {{
+          this.debugLog(`Connection error: ${{error.message}}. Attempting to detect correct port...`);
+          const portChanged = await this.detectApiPort();
+
+          if (portChanged) {{
+            this.debugLog(`Port detected, retrying createInstance with new URL: ${{this.apiUrl}}`);
+            return this.createInstance(className, constructorArgs);
+          }}
+        }}
+      }}
+
+      throw error;
     }}
-
-    const data = await response.json();
-    const instanceId = data.instance_id;
-    this.debugLog(`Created instance with ID: ${{instanceId}}`);
-
-    // Store in the class-based cache - useful for some scenarios
-    this.instanceCache.set(className, instanceId);
-
-    return instanceId;
   }}
 
   // Register an object with an instance ID for tracking
@@ -204,39 +302,66 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       instanceId: instanceId
     }});
 
-    const response = await fetch(`${{this.apiUrl}}/call-method`, {{
-      method: 'POST',
-      headers: {{
-        'Content-Type': 'application/json',
-      }},
-      body: JSON.stringify({{
-        class: className,
-        method: methodName,
-        args: processedArgs,
-        constructor_args: safeConstructorArgs,
-        instance_id: instanceId,
-      }}),
-    }});
+    try {{
+      const response = await fetch(`${{this.apiUrl}}/call-method`, {{
+        method: 'POST',
+        headers: {{
+          'Content-Type': 'application/json',
+        }},
+        body: JSON.stringify({{
+          class: className,
+          method: methodName,
+          args: processedArgs,
+          constructor_args: safeConstructorArgs,
+          instance_id: instanceId,
+        }}),
+      }});
 
-    if (!response.ok) {{
-      const error = await response.text();
-      this.debugLog(`Error calling method: ${{error}}`);
-      throw new Error(`Failed to call Python method: ${{error}}`);
-    }}
+      if (!response.ok) {{
+        const errorText = await response.text();
+        this.debugLog(`Error calling method: ${{errorText}}`);
 
-    const data = await response.json();
-
-    // If we got a new instance ID back, register it
-    if (data.instance_id && data.instance_id !== instanceId) {{
-      this.instanceCache.set(className, data.instance_id);
-      // If there's an instance object, register it too
-      if (instanceObj) {{
-        this.registerInstance(instanceObj, data.instance_id);
+        // Try to parse as JSON for detailed error information
+        try {{
+          const errorDetails = JSON.parse(errorText);
+          throw new Error(`Failed to call Python method: ${{errorDetails.detail || errorText}}`);
+        }} catch (parseError) {{
+          // If not JSON, use text directly
+          throw new Error(`Failed to call Python method: ${{errorText}}`);
+        }}
       }}
-    }}
 
-    this.debugLog(`Method result:`, data.result);
-    return data.result;
+      const data = await response.json();
+
+      // If we got a new instance ID back, register it
+      if (data.instance_id && data.instance_id !== instanceId) {{
+        this.instanceCache.set(className, data.instance_id);
+        // If there's an instance object, register it too
+        if (instanceObj) {{
+          this.registerInstance(instanceObj, data.instance_id);
+        }}
+      }}
+
+      this.debugLog(`Method result:`, data.result);
+      return data.result;
+    }} catch (error) {{
+      // Check for connection errors and attempt port detection
+      if (error instanceof Error && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {{
+        this.connectionErrorCount++;
+
+        if (this.connectionErrorCount <= this.maxRetries) {{
+          this.debugLog(`Connection error: ${{error.message}}. Attempting to detect correct port...`);
+          const portChanged = await this.detectApiPort();
+
+          if (portChanged) {{
+            this.debugLog(`Port detected, retrying method call with new URL: ${{this.apiUrl}}`);
+            return this.callMethod(className, methodName, args, constructorArgs, instanceObj);
+          }}
+        }}
+      }}
+
+      throw error;
+    }}
   }}
 }}
 

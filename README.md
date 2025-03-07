@@ -55,12 +55,12 @@ Here's how to quickly test PyFlow.ts with your Python code:
 Generate TypeScript code from your Python module:
 
 ```bash
-pyflow init -m examples/basic/calculator.py -o examples/basic/generated --port 8002
+pyflow init -m examples/ -o /generated
 ```
 
 This command:
-- Takes your Python module (`examples/basic/calculator.py`)
-- Generates TypeScript code in the specified output directory (`examples/basic/generated`)
+- Takes your Python module (`examples/`)
+- Generates TypeScript code in the specified output directory (`generated`)
 - Configures the API server to use port 8002
 
 ### 2. Run the API Server
@@ -68,7 +68,7 @@ This command:
 Start the API server to expose your Python functions:
 
 ```bash
-pyflow run -m examples.basic.calculator
+pyflow run -m examples/ -g generated
 ```
 
 This command:
@@ -81,14 +81,14 @@ This command:
 Test your TypeScript code with the `test` command:
 
 ```bash
-pyflow test -f examples/basic/calculator-app.ts -g examples/basic/generated -p 8002 -v
+pyflow test -f demo.ts -g generated --debug
 ```
 
 This command:
 - Runs the specified TypeScript file (`examples/basic/calculator-app.ts`)
 - Uses the generated TypeScript code in the directory (`examples/basic/generated`)
-- Connects to the API server on the specified port (8002)
-- Provides verbose output with the `-v` flag
+- Connects to the API server on the specified port (default 8000)
+- Provides verbose output with the `--debug` flag
 
 The `test` command automatically sets up a temporary environment with proper TypeScript and ESM support, allowing you to quickly test your code without manual configuration.
 
@@ -104,7 +104,7 @@ The easiest way to get started is to use the `init` command, which sets up every
 
 ```bash
 # Initialize a project for your Python module
-pyflow init -m your_module.py
+pyflow init -m ./
 ```
 
 This single command:
@@ -345,6 +345,7 @@ pyflow generate -m MODULE -o OUTPUT_DIR
 - `--host`: Host to bind to (default: 0.0.0.0)
 - `--port`: Port to bind to (default: 8000)
 - `--reload`: Enable auto-reload for development
+- `--debug`: Enable debug mode for verbose output
 
 If the specified port is already in use, PyFlow.ts will automatically attempt to find an available port.
 
@@ -384,10 +385,10 @@ PyFlow.ts can also import Python files directly without requiring them to be in 
 
 ```bash
 # Import a specific file
-pyflow generate -m ./path/to/your_file.py -o ./generated
+pyflow generate -m ./path/ -o ./generated
 
 # Run server for a specific file
-pyflow run -m ./path/to/your_file.py
+pyflow run -m ./path/ -g ./generated
 ```
 
 ## Port Configuration

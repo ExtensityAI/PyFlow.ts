@@ -27,7 +27,7 @@ import traceback
 import datetime as dt  # Added for timestamp tracking
 
 from typing import Any, Dict, List, Optional, Union, Type
-from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi import FastAPI, HTTPException, Body, Request, status
 from pydantic import BaseModel, create_model
 from pyflow.core import registry
 
@@ -49,6 +49,23 @@ def debug_log(message: str, *args, **kwargs):
             print(f"[PyFlow API] {{message}} {{all_args_str}}")
         else:
             print(f"[PyFlow API] {{message}}")
+
+# Enhanced error handling with more detailed error responses
+class PyFlowError(Exception):
+    """Base class for PyFlow.ts errors with enhanced details."""
+    def __init__(self, message: str, status_code: int = 400, details: Dict = None):
+        self.message = message
+        self.status_code = status_code
+        self.details = details or {{}}
+        super().__init__(self.message)
+
+    def to_dict(self):
+        """Convert error to a dictionary for JSON response."""
+        return {{
+            "error": self.message,
+            "status_code": self.status_code,
+            "details": self.details
+        }}
 
 # Process arguments that may contain instance references
 def process_args(args):
@@ -104,6 +121,15 @@ def create_request_model(func_name: str, params: Dict[str, Any]) -> Type[BaseMod
 # Initialize API router
 app = FastAPI(title="PyFlow.ts API", description="Generated API for PyFlow.ts-decorated objects")
 
+# Custom exception handler for PyFlowError
+@app.exception_handler(PyFlowError)
+async def pyflow_exception_handler(request: Request, exc: PyFlowError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict()
+    )
+
 @app.post("/api/call-function")
 async def call_function(request: Dict[str, Any] = Body(...)):
     """Call a Python function."""
@@ -118,7 +144,15 @@ async def call_function(request: Dict[str, Any] = Body(...)):
 
     try:
         # Import the module
-        module = importlib.import_module(module_name)
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as e:
+            debug_log(f"Import error for module: {{module_name}}")
+            raise PyFlowError(
+                message=f"Module {{module_name}} not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+                details={{"error_type": "import_error", "error_msg": str(e)}}
+            )
 
         # Get the function
         func = getattr(module, function_name.split('.')[-1], None)
@@ -133,7 +167,17 @@ async def call_function(request: Dict[str, Any] = Body(...)):
                     break
 
             if not found:
-                raise HTTPException(status_code=404, detail=f"Function {{function_name}} not found in module {{module_name}}")
+                # List available functions for debugging
+                available_functions = []
+                for f_key, f_info in registry.functions.items():
+                    if f_info['module'] == module_name:
+                        available_functions.append(f_info['func'].__name__)
+
+                raise PyFlowError(
+                    message=f"Function {{function_name}} not found in module {{module_name}}",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    details={{"available_functions": available_functions}}
+                )
 
         # Call the function with the arguments
         debug_log(f"Executing function with args:", args)
@@ -143,9 +187,12 @@ async def call_function(request: Dict[str, Any] = Body(...)):
         # Return the result
         return {{"result": result}}
 
-    except ImportError:
+    except PyFlowError:
+        # Re-raise PyFlowError as-is
+        raise
+    except ImportError as e:
         debug_log(f"Import error for module: {{module_name}}")
-        raise HTTPException(status_code=404, detail=f"Module {{module_name}} not found")
+        raise HTTPException(status_code=404, detail=f"Module {{module_name}} not found: {{str(e)}}")
     except (TypeError, ValueError) as e:
         debug_log(f"Invalid arguments error:", str(e))
         raise HTTPException(status_code=400, detail=f"Invalid arguments: {{str(e)}}")

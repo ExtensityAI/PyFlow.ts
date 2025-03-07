@@ -356,13 +356,16 @@ def generate_ts_class(cls: Type) -> str:
                 lines.append(f"      this")  # Pass this reference separately
                 lines.append(f"    );")
 
-                # Store instance ID if it was returned - with proper null check
-                lines.append(f"    if (result && result.__instance_id__) {{")
-                lines.append(f"      this._instanceId = result.__instance_id__;")
-                lines.append(f"      if (this._instanceId) {{")  # Add null check
-                lines.append(f"        pyflowRuntime.registerInstance(this, this._instanceId);")
+                # Enhanced error handling with improved response parsing
+                lines.append(f"    if (result && typeof result === 'object') {{")
+                lines.append(f"      // Handle instance ID if present")
+                lines.append(f"      if (result.__instance_id__) {{")
+                lines.append(f"        this._instanceId = result.__instance_id__;")
+                lines.append(f"        if (this._instanceId) {{")  # Add null check
+                lines.append(f"          pyflowRuntime.registerInstance(this, this._instanceId);")
+                lines.append(f"        }}")
+                lines.append(f"        delete result.__instance_id__;")
                 lines.append(f"      }}")
-                lines.append(f"      delete result.__instance_id__;")
                 lines.append(f"    }}")
 
                 lines.append(f"    return result;")
