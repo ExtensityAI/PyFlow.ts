@@ -1,0 +1,3 @@
+pyflow-ts
+numpy
+sentence-transformers
