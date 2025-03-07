@@ -1,8 +1,16 @@
 # PyFlow.ts
 
+<img src="https://raw.githubusercontent.com/ExtensityAI/symbolicai/refs/heads/main/assets/images/banner.png">
+
+-----
+
 [![PyPI version](https://img.shields.io/pypi/v/pyflow-ts.svg)](https://pypi.org/project/pyflow-ts/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pyflow-ts.svg)](https://pypi.org/project/pyflow-ts/)
-[![License](https://img.shields.io/github/license/ExtensityAI/pyflow.svg)](https://github.com/ExtensityAI/PyFlow.ts/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[![Twitter](https://img.shields.io/twitter/url/https/twitter.com/dinumariusc.svg?style=social&label=Follow%20%40DinuMariusC)](https://twitter.com/DinuMariusC) [![Twitter](https://img.shields.io/twitter/url/https/twitter.com/symbolicapi.svg?style=social&label=Follow%20%40ExtensityAI)](https://twitter.com/ExtensityAI)
+[![Discord](https://img.shields.io/discord/768087161878085643?label=Discord&logo=Discord&logoColor=white)](https://discord.gg/QYMNnh9ra8) [![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FXpitfire%2Fpyflowts&count_bg=%2379C83D&title_bg=%23555555&icon=&icon_color=%23E7E7E7&title=hits&edge_flat=false)](https://hits.seeyoufarm.com) [![GitHub forks](https://img.shields.io/github/forks/ExtensityAI/PyFlow.ts.svg?style=social&label=Fork&maxAge=2592000)](https://GitHub.com/ExtensityAI/PyFlow.ts) [![GitHub stars](https://img.shields.io/github/stars/ExtensityAI/PyFlow.ts.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/ExtensityAI/PyFlow.ts/stargazers/)
+
 
 **PyFlow.ts** - Bridge Python and TypeScript with ease. Use simple decorators to expose Python functions, methods, and classes to TypeScript with full type safety.
 
