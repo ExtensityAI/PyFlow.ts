@@ -3,8 +3,11 @@ Utilities for inspecting Python objects.
 """
 import inspect
 import importlib
+import os
 import pkgutil
 import re
+import logging
+logging.basicConfig(level=logging.INFO)
 from typing import Any, Dict, List, Callable, Type, get_type_hints, Set, Tuple
 import sys
 
@@ -372,11 +375,61 @@ def get_decorated_items_in_module(module_name: str) -> Tuple[List[Type], List[Ca
 
                 if has_decorated_method:
                     break
+
+        # If we didn't find any decorated items, try source code scanning
+        if not decorated_classes and not decorated_functions:
+            try:
+                file_path = inspect.getfile(module)
+                with open(file_path, 'r') as f:
+                    source = f.read()
+
+                # Look for @extensity decorators in the source code
+                decorator_pattern = r'@\s*extensity\s*\n\s*(class|def)\s+([A-Za-z0-9_]+)'
+                matches = re.findall(decorator_pattern, source)
+
+                if matches:
+                    logging.debug(f"Found potential decorated items in source: {matches}")
+
+                    # Check each potential match
+                    for kind, name in matches:
+                        if hasattr(module, name):
+                            item = getattr(module, name)
+                            # Manually mark as decorated if needed
+                            if not getattr(item, '_pyflow_decorated', False):
+                                setattr(item, '_pyflow_decorated', True)
+
+                            if kind == 'class' and item not in decorated_classes:
+                                decorated_classes.append(item)
+                                logging.debug(f"Added class from source analysis: {name}")
+                            elif kind == 'def' and item not in decorated_functions:
+                                decorated_functions.append(item)
+                                logging.debug(f"Added function from source analysis: {name}")
+            except (TypeError, IOError):
+                # Module might not have a file, or file might not be readable
+                pass
+
     except RuntimeError as e:
         if "request context" in str(e).lower():
             # Fall back to safer inspection method
             return _safe_get_decorated_items(module_name)
         raise
+
+    # Also check registry for any items from this module that might have been missed
+    from ..core import registry
+
+    for class_name, class_info in registry.classes.items():
+        if class_info['module'] == module_name:
+            cls = class_info.get('cls')
+            if cls and cls not in decorated_classes:
+                decorated_classes.append(cls)
+                logging.debug(f"Added class from registry: {cls.__name__}")
+
+    for func_name, func_info in registry.functions.items():
+        if func_info['module'] == module_name:
+            func = func_info.get('func')
+            if func and func not in decorated_functions:
+                decorated_functions.append(func)
+                logging.debug(f"Added function from registry: {func.__name__}")
 
     return decorated_classes, decorated_functions
 
@@ -390,7 +443,7 @@ def _safe_get_decorated_items(module_name: str) -> Tuple[List[Type], List[Callab
         try:
             module_spec = importlib.util.find_spec(module_name)
             if not module_spec or not module_spec.origin:
-                print(f"Could not find module file for {module_name}")
+                logging.debug(f"Could not find module file for {module_name}")
                 return [], []
 
             module_file = module_spec.origin
@@ -406,7 +459,7 @@ def _safe_get_decorated_items(module_name: str) -> Tuple[List[Type], List[Callab
                     module_file = full_path
                     break
             else:
-                print(f"Could not find module file for {module_name}")
+                logging.debug(f"Could not find module file for {module_name}")
                 return [], []
 
         # Read the source code to find decorated items

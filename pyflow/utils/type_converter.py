@@ -206,12 +206,34 @@ def generate_ts_class(cls: Type) -> str:
         attrs = {}
 
     # Add instance variables from __init__
+    init_params = []
+    constructor_params = []
+    constructor_assignments = []
+
     if hasattr(cls, "__init__") and cls.__init__ is not object.__init__:
         try:
             init_hints = get_type_hints(cls.__init__)
             init_hints.pop('self', None)
             init_hints.pop('return', None)
-            attrs.update(init_hints)
+
+            # Extract required and optional parameters from __init__
+            init_sig = inspect.signature(cls.__init__)
+            for name, param in list(init_sig.parameters.items())[1:]:  # Skip self
+                if name in init_hints:
+                    param_type = python_type_to_ts(init_hints[name])
+                    if param.default is inspect.Parameter.empty:
+                        # Required parameter
+                        init_params.append(name)
+                        constructor_params.append(f"{name}: {param_type}")
+                        constructor_assignments.append(f"    this.{name} = {name};")
+                    else:
+                        # Optional parameter
+                        constructor_params.append(f"{name}?: {param_type}")
+                        constructor_assignments.append(f"    if ({name} !== undefined) this.{name} = {name};")
+
+                    # Add to attrs to ensure properties are created
+                    attrs[name] = init_hints[name]
+
         except (TypeError, NameError):
             pass
 
@@ -240,21 +262,36 @@ def generate_ts_class(cls: Type) -> str:
                 default_value = "new Set()"
 
             # Add the property declaration with initialization or definite assignment
-            if default_value:
+            # For constructor parameters, we don't add default values
+            if attr_name in init_params:
+                # Use definite assignment assertion for required constructor params
+                lines.append(f"  {attr_name}!: {ts_type};")
+            elif default_value:
                 lines.append(f"  {attr_name}: {ts_type} = {default_value};")
             else:
                 # Use definite assignment assertion (!) for complex types without a clear default
                 lines.append(f"  {attr_name}!: {ts_type};")  # The ! tells TypeScript this will be initialized
 
-    # Add constructor
-    lines.append(f"  constructor(args: Partial<{class_name}> = {{}}) {{")
-    lines.append("    Object.assign(this, args);")
-    lines.append("  }")
+    # Add constructor with explicit required parameters
+    if constructor_params:
+        # Add specific constructor with required params
+        lines.append(f"  constructor({', '.join(constructor_params)}, additionalArgs: Partial<{class_name}> = {{}}) {{")
+        # Add explicit assignments for constructor parameters
+        lines.extend(constructor_assignments)
+        # Then apply any additional properties
+        lines.append("    Object.assign(this, additionalArgs);")
+        lines.append("  }")
+    else:
+        # Simple constructor with just args
+        lines.append(f"  constructor(args: Partial<{class_name}> = {{}}) {{")
+        lines.append("    Object.assign(this, args);")
+        lines.append("  }")
+
     lines.append("")
 
     # Add methods
     for name, method in inspect.getmembers(cls, inspect.isfunction):
-        if name.startswith('_') and name != '__init__':
+        if name.startswith('_'):
             continue  # Skip private/special methods except __init__
 
         # Include all methods in the class implementation
@@ -296,11 +333,19 @@ def generate_ts_class(cls: Type) -> str:
             # Only exclude static methods or other special cases
             if is_class_decorated or getattr(method, '_pyflow_decorated', False):
                 lines.append(f"  async {name}({', '.join(param_strings)}): Promise<{return_type}> {{")
+                # Get constructor parameters for method calls (important for classes with required params)
+                constructor_args = []
+                for param in init_params:
+                    constructor_args.append(f"{param}: this.{param}")
+
                 lines.append(f"    return pyflowRuntime.callMethod(")
                 lines.append(f"      '{class_name}',")
                 lines.append(f"      '{name}',")
                 lines.append(f"      {{{', '.join(f'{pname}: {pname}' for pname in param_names)}}},")
-                lines.append(f"      {{}}")
+                if constructor_args:
+                    lines.append(f"      {{{', '.join(constructor_args)}}}")
+                else:
+                    lines.append(f"      {{}}")
                 lines.append(f"    );")
                 lines.append(f"  }}")
             else:
@@ -316,11 +361,31 @@ def generate_ts_class(cls: Type) -> str:
             pass
 
     # Add createInstance static method
-    lines.append(f"  static async createInstance(args: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
-    lines.append(f"    const instance = new {class_name}(args);")
-    lines.append(f"    await pyflowRuntime.createInstance('{class_name}', args);")
-    lines.append("    return instance;")
-    lines.append("  }")
+    if constructor_params:
+        # For classes with required constructor params
+        req_params = []
+        opt_params = []
+        for param in constructor_params:
+            if '?' in param:
+                opt_params.append(param)
+            else:
+                req_params.append(param)
+
+        params_list = req_params + opt_params
+
+        lines.append(f"  static async createInstance({', '.join(params_list)}, additionalArgs: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
+        lines.append(f"    const constructorArgs = {{{', '.join([p.split(':')[0].replace('?', '') for p in constructor_params])}}};")
+        lines.append(f"    const instance = new {class_name}({', '.join([p.split(':')[0].replace('?', '') for p in params_list])}, additionalArgs);")
+        lines.append(f"    await pyflowRuntime.createInstance('{class_name}', constructorArgs);")
+        lines.append("    return instance;")
+        lines.append("  }")
+    else:
+        # Simple case - no required params
+        lines.append(f"  static async createInstance(args: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
+        lines.append(f"    const instance = new {class_name}(args);")
+        lines.append(f"    await pyflowRuntime.createInstance('{class_name}', args);")
+        lines.append("    return instance;")
+        lines.append("  }")
 
     lines.append("}")
 
@@ -334,6 +399,9 @@ def generate_ts_function(func) -> str:
     """Generate TypeScript function from a Python function."""
     func_name = func.__name__
     module_name = func.__module__
+
+    if func_name.startswith('_'):
+        return ""  # Skip private functions
 
     try:
         hints = get_type_hints(func)

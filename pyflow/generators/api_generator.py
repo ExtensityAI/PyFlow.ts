@@ -429,6 +429,9 @@ async def list_services():
 
         # Generate explicit endpoints for each registered function
         for func_name, func_info in registry.functions.items():
+            if func_name.startswith('_'):
+                continue
+
             func = func_info['func']
             signature = func_info['signature']
             module_name = func_info['module']
@@ -515,6 +518,9 @@ async def _{safe_class_name}_create_endpoint(request: Dict[str, Any] = Body(...)
 
                 method = method_info.get('method')
                 if not method:
+                    continue
+
+                if method_name.startswith('_'):
                     continue
 
                 # Add doc string if available

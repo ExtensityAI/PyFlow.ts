@@ -32,6 +32,12 @@ class Registry:
         }
         self.modules.add(module_name)
 
+        # Also register parent modules to ensure proper generation
+        parts = module_name.split('.')
+        for i in range(1, len(parts)):
+            parent_module = '.'.join(parts[:i])
+            self.modules.add(parent_module)
+
     def register_class(self, cls: Type, module_name: str) -> None:
         """Register a class with the PyFlow.ts registry."""
         methods = {}
@@ -74,6 +80,12 @@ class Registry:
 
         # Keep track of which modules have decorated items
         self.modules.add(module_name)
+
+        # Also register parent modules to ensure proper generation
+        parts = module_name.split('.')
+        for i in range(1, len(parts)):
+            parent_module = '.'.join(parts[:i])
+            self.modules.add(parent_module)
 
 registry = Registry()
 

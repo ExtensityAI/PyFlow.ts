@@ -4,6 +4,9 @@ TypeScript code generator for PyFlow.ts.
 from pathlib import Path
 import inspect
 import importlib
+import logging
+logging.basicConfig(level=logging.INFO)
+
 from typing import List, Type, Set
 
 from ..core import registry
@@ -25,7 +28,7 @@ class TypeScriptGenerator:
         self.host = host
         self.port = port
         self.debug = debug
-        # Runtime code remains unchanged
+        # Runtime code with improved constructor argument handling
         self.runtime_code = f"""// PyFlow.ts runtime for TypeScript
 export interface PyFlowRuntime {{
   callFunction(moduleName: string, functionName: string, args: any): any;
@@ -93,6 +96,9 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       constructorArgs: constructorArgs
     }});
 
+    // Ensure constructor args aren't undefined
+    const safeArgs = constructorArgs || {{}};
+
     const response = await fetch(`${{this.apiUrl}}/create-instance`, {{
       method: 'POST',
       headers: {{
@@ -100,7 +106,7 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       }},
       body: JSON.stringify({{
         class: className,
-        constructor_args: constructorArgs,
+        constructor_args: safeArgs,
       }}),
     }});
 
@@ -118,11 +124,16 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
 
   async callMethod(className: string, methodName: string, args: any, constructorArgs: any): Promise<any> {{
     const instanceId = this.instanceCache.get(className);
+
+    // Ensure args and constructorArgs aren't undefined
+    const safeArgs = args || {{}};
+    const safeConstructorArgs = constructorArgs || {{}};
+
     this.debugLog(`Calling method: ${{className}}.${{methodName}}`, {{
       class: className,
       method: methodName,
-      args: args,
-      constructorArgs: constructorArgs,
+      args: safeArgs,
+      constructorArgs: safeConstructorArgs,
       instanceId: instanceId
     }});
 
@@ -134,8 +145,8 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       body: JSON.stringify({{
         class: className,
         method: methodName,
-        args: args,
-        constructor_args: constructorArgs,
+        args: safeArgs,
+        constructor_args: safeConstructorArgs,
         instance_id: instanceId,
       }}),
     }});
@@ -204,6 +215,9 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
 
             # Now check if any function in the registry looks like a method
             for func_name, func_info in registry.functions.items():
+                if func_name.startswith('_'):
+                    continue
+
                 if func_info['module'] != module_name:
                     continue
 
@@ -291,12 +305,18 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                     raise
 
             # Add decorated classes from registry
+            registry_classes_added = 0
             for class_name, class_info in registry.classes.items():
                 if class_info['module'] == module_name:
                     cls = class_info.get('cls')
                     if cls and cls not in decorated_classes:
                         decorated_classes.append(cls)
-                        print(f"Added class from registry: {cls.__name__}")
+                        registry_classes_added += 1
+                        logging.debug(f"Added class from registry: {cls.__name__}")
+
+            # Debug log to help diagnose issues
+            if registry_classes_added > 0:
+                logging.debug(f"Added {registry_classes_added} classes from registry for module {module_name}")
 
             # Find classes with decorated methods - pass decorated_classes to exclude them
             classes_with_decorated_methods = []
@@ -305,17 +325,20 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                     classes_with_decorated_methods = self._get_classes_with_decorated_methods(module_name, set(decorated_classes))
                 except RuntimeError as e:
                     if "request context" in str(e).lower():
-                        print(f"Skipping method detection for web framework module {module_name}")
+                        logging.debug(f"Skipping method detection for web framework module {module_name}")
                     else:
                         raise
 
             # Add decorated functions from registry
             for func_name, func_info in registry.functions.items():
+                if func_name.startswith('_'):
+                    continue
+
                 if func_info['module'] == module_name:
                     func = func_info.get('func')
                     if func and func not in decorated_functions:
                         decorated_functions.append(func)
-                        print(f"Added function from registry: {func.__name__}")
+                        logging.debug(f"Added function from registry: {func.__name__}")
 
             # Get all referenced types - this will include types from signatures and inheritance
             referenced_types = []
@@ -333,13 +356,22 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                         processed_class_names.add(type_name)
             except RuntimeError as e:
                 if "request context" in str(e).lower():
-                    print(f"Skipping referenced type detection for web framework module {module_name}")
+                    logging.debug(f"Skipping referenced type detection for web framework module {module_name}")
                 else:
                     raise
 
-            # If nothing to generate, return
-            if not decorated_classes and not decorated_functions and not referenced_types and not classes_with_decorated_methods:
-                print(f"No PyFlow.ts-decorated objects found in module {module_name}")
+            # If nothing to generate, return - but first check registry again to be sure
+            direct_check_has_items = bool(decorated_classes or decorated_functions or referenced_types or classes_with_decorated_methods)
+
+            # Check if this module exists in registry.modules directly
+            registry_has_module = module_name in registry.modules
+
+            # Log additional info to help debug
+            if not direct_check_has_items and registry_has_module:
+                logging.debug(f"Module {module_name} is in registry.modules but no items were found directly. Proceeding anyway.")
+
+            if not direct_check_has_items and not registry_has_module:
+                logging.debug(f"No PyFlow.ts-decorated objects found in module {module_name}")
                 return
 
             # Let's do a final check to make sure there's no overlap
@@ -348,11 +380,11 @@ export const pyflowRuntime: PyFlowRuntime = new DefaultPyFlowRuntime();
                                               if cls.__name__ not in decorated_class_names]
 
             # Log what we found
-            print(f"Found in {module_name}:")
-            print(f"  - {len(decorated_classes)} decorated classes")
-            print(f"  - {len(decorated_functions)} decorated functions")
-            print(f"  - {len(classes_with_decorated_methods)} classes with decorated methods")
-            print(f"  - {len(referenced_types)} referenced types")
+            logging.debug(f"Found in {module_name}:")
+            logging.debug(f"  - {len(decorated_classes)} decorated classes")
+            logging.debug(f"  - {len(decorated_functions)} decorated functions")
+            logging.debug(f"  - {len(classes_with_decorated_methods)} classes with decorated methods")
+            logging.debug(f"  - {len(referenced_types)} referenced types")
 
             # Calculate import path
             depth = len(module_name.split('.'))
@@ -365,6 +397,7 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
 """
             # Track what we've already generated to avoid duplicates
             generated_types = set()
+            content_generated = False
 
             # Generate interfaces for referenced types first
             for cls in referenced_types:
@@ -376,6 +409,7 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
                     if type_code.strip():  # Only add if there's actual content
                         ts_code += type_code + "\n\n"
                         generated_types.add(cls.__name__)
+                        content_generated = True
                     else:
                         print(f"Warning: Empty type generated for {cls.__name__}")
                 except Exception as e:
@@ -391,6 +425,8 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
 
                     if class_code.strip():
                         ts_code += class_code + "\n\n"
+                        generated_types.add(cls.__name__)
+                        content_generated = True
                     else:
                         print(f"Warning: Empty class generated for {cls.__name__}")
                 except Exception as e:
@@ -406,6 +442,8 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
 
                     if class_code.strip():
                         ts_code += class_code + "\n\n"
+                        generated_types.add(cls.__name__)
+                        content_generated = True
                     else:
                         print(f"Warning: Empty class generated for method class {cls.__name__}")
                 except Exception as e:
@@ -413,21 +451,44 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
 
             # Generate functions
             for func in decorated_functions:
+                if func.__name__.startswith('_'):
+                    continue
+
                 try:
                     func_code = generate_ts_function(func)
                     if func_code.strip():
                         ts_code += func_code + "\n\n"
+                        content_generated = True
                     else:
                         print(f"Warning: Empty function generated for {func.__name__}")
                 except Exception as e:
                     print(f"Error generating function for {func.__name__}: {str(e)}")
 
+            # If we're in the registry but no content was generated, check again for interfaces explicitly
+            if not content_generated and registry_has_module:
+                logging.debug(f"Module {module_name} is in registry but no TypeScript content was generated. Checking for interfaces...")
+                # Check directly in the registry for classes from this module
+                for class_name, class_info in registry.classes.items():
+                    if class_info['module'] == module_name and 'cls' in class_info:
+                        cls = class_info['cls']
+                        if cls.__name__ not in generated_types:
+                            try:
+                                type_code = generate_ts_type(cls)
+                                if type_code.strip():
+                                    ts_code += type_code + "\n\n"
+                                    generated_types.add(cls.__name__)
+                                    content_generated = True
+                                    logging.debug(f"Added interface for {cls.__name__} from registry")
+                            except Exception as e:
+                                print(f"Error generating interface for {cls.__name__}: {str(e)}")
+
             # Write to file
             output_file = output_dir / "index.ts"
             with open(output_file, 'w') as f:
                 f.write(ts_code)
-
-            print(f"Generated TypeScript code for module {module_name} at {output_file}")
+                logging.debug(f"Generated TypeScript code for module {module_name} at {output_file}")
+                if not content_generated:
+                    print(f"Warning: Generated file contains only imports, no types or functions.")
 
             # Handle runtime file for proper imports
             parent_dir = output_dir
@@ -443,7 +504,7 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
                 # Write the runtime code to this location
                 with open(target_runtime_path, 'w') as f:
                     f.write(self.runtime_code)
-                print(f"Generated runtime at {target_runtime_path}")
+                    logging.debug(f"Generated runtime at {target_runtime_path}")
         except Exception as e:
             print(f"Error processing module {module_name}: {str(e)}")
             import traceback
@@ -502,14 +563,14 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
                 if not index_path.exists():
                     with open(index_path, 'w') as f:
                         f.write(content)
-                        print(f"Created index file at {index_path}")
+                        logging.debug(f"Created index file at {index_path}")
                 else:
                     with open(index_path, 'r') as f:
                         existing_content = f.read()
                     if existing_content != content:
                         with open(index_path, 'a') as f:
                             f.write(content)
-                            print(f"Updated index file at {index_path}")
+                            logging.debug(f"Updated index file at {index_path}")
 
         # Generate root index file with correct export paths
         root_index = self.output_dir / "index.ts"
@@ -527,7 +588,7 @@ import {{ pyflowRuntime }} from '{import_path}pyflowRuntime.js';
             # Add export for pyflowRuntime
             f.write("\nexport { pyflowRuntime };\n")
 
-            print(f"Generated root index file with {len(exported_modules)} module exports: {', '.join(exported_modules)}")
+            logging.debug(f"Generated root index file with {len(exported_modules)} module exports: {', '.join(exported_modules)}")
 
     def generate_all(self) -> None:
         """Generate TypeScript code for all registered modules."""
