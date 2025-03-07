@@ -1,4 +1,4 @@
-import { SEOQueryOptimizerService, Symbol } from './generated/symbolicai/seo_extensions';
+import { SEOQueryOptimizerService, Symbol } from './generated/seo_extensions';
 
 const sqo = new SEOQueryOptimizerService();
 const sym = new Symbol('Give me a car after 2010 to drive');
