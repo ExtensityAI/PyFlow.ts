@@ -104,7 +104,14 @@ class DataSeries:
                 "median": None
             }
 
-        values = [point.value for point in self.data_points]
+        values = []
+        for point in self.data_points:
+            if isinstance(point, dict):
+                # If it's a dictionary, access 'value' as a key
+                values.append(point['value'])
+            else:
+                # If it's a DataPoint object, access 'value' as an attribute
+                values.append(point.value)
 
         return {
             "count": len(values),

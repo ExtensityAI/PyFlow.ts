@@ -180,7 +180,7 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
 
   async callMethod(className: string, methodName: string, args: any, constructorArgs: any, instanceObj?: any): Promise<any> {{
     // Get instance ID from the object if provided
-    let instanceId = null;
+    let instanceId: string | null | undefined = null;
     if (instanceObj && this.instanceIds.has(instanceObj)) {{
       instanceId = this.instanceIds.get(instanceObj);
       this.debugLog(`Found instance ID from object: ${{instanceId}}`);

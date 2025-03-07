@@ -452,6 +452,15 @@ def process_result_for_serialization(result):
                 debug_log("Could not get __dict__, returning as is")
                 return result
 
+    # For objects with to_dict method
+    elif hasattr(result, 'to_dict') and callable(getattr(result, 'to_dict')):
+        debug_log(f"Using to_dict() method for object of type {{type(result).__name__}}")
+        try:
+            return result.to_dict()
+        except Exception as e:
+            debug_log(f"Error calling to_dict(): {{e}}")
+            return result
+
     # Just return other types as they are
     return result
 
@@ -477,13 +486,13 @@ async def get_instance_info(instance_id: str):
                 # If not serializable, just include the type
                 attributes[key] = f"<{{type(value).__name__}}>"
 
-    return {
+    return {{
         "instance_id": instance_id,
         "class_name": instance_data['class_name'],
         "creation_time": instance_data['creation_time'],
         "last_accessed": instance_data.get('last_accessed', 'unknown'),
         "attributes": attributes
-    }
+    }}
 
 # Add endpoint to list all active instances
 @app.get("/api/instances")
@@ -491,12 +500,12 @@ async def list_instances():
     """List all active instances in the cache."""
     result = []
     for instance_id, data in instance_cache.items():
-        result.append({
+        result.append({{
             "instance_id": instance_id,
             "class_name": data['class_name'],
             "creation_time": data.get('creation_time', 'unknown'),
             "last_accessed": data.get('last_accessed', 'unknown')
-        })
+        }})
     return result
 
 # Additional API endpoints for listing available services

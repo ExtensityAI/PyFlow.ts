@@ -486,5 +486,130 @@ def generate_ts_function(func) -> str:
 
 def generate_ts_type(cls: Type) -> str:
     """Generate TypeScript type definition for a class."""
-    # Use interface generation for non-decorated classes
-    return generate_ts_interface(cls)
+    class_name = cls.__name__
+
+    # Generate a class without interface/implementation split
+    class_code = f"""
+export class {class_name} {{
+"""
+
+    # Add property declarations with default values
+    try:
+        attrs = get_type_hints(cls)
+    except (TypeError, NameError):
+        attrs = {}
+
+    # Extract initialization parameters from __init__
+    init_params = []
+    constructor_params = []
+    param_types = {}
+
+    # Track if we've seen an optional parameter already
+    has_optional_param = False
+
+    if hasattr(cls, "__init__") and cls.__init__ is not object.__init__:
+        try:
+            init_sig = inspect.signature(cls.__init__)
+            init_hints = get_type_hints(cls.__init__)
+
+            # Skip 'self' parameter
+            for name, param in list(init_sig.parameters.items())[1:]:
+                param_type = "any"
+                if name in init_hints:
+                    param_type = python_type_to_ts(init_hints[name])
+
+                param_types[name] = param_type
+
+                # Determine if this parameter is optional or needs a default value
+                is_optional = param.default is not inspect.Parameter.empty
+                if is_optional:
+                    has_optional_param = True
+                    constructor_params.append(f"{name}?: {param_type}")
+                elif has_optional_param:
+                    # If we've already seen an optional parameter, all subsequent params need defaults
+                    # Determine appropriate default value by name convention
+                    default_value = "{}"
+                    if name == "args" or name.endswith("_args"):
+                        default_value = "[]"
+                    elif name == "kwargs" or name.endswith("_kwargs") or "kwargs" in name:
+                        default_value = "{}"
+
+                    constructor_params.append(f"{name}: {param_type} = {default_value}")
+                else:
+                    constructor_params.append(f"{name}: {param_type}")
+
+                init_params.append(name)
+
+                # Ensure all constructor parameters are added as class properties
+                if name not in attrs:
+                    attrs[name] = init_hints.get(name, Any)
+        except (TypeError, NameError):
+            pass
+
+    # Add property declarations for all properties
+    for attr_name, attr_type in attrs.items():
+        if not attr_name.startswith('_'):  # Skip private attributes
+            ts_type = python_type_to_ts(attr_type)
+
+            # Provide default values based on type
+            default_value = None
+            if ts_type == "string":
+                default_value = '""'  # Empty string
+            elif ts_type == "number":
+                default_value = "0"
+            elif ts_type == "boolean":
+                default_value = "false"
+            elif ts_type.endswith("[]"):
+                default_value = "[]"  # Empty array
+            elif ts_type == "Date":
+                default_value = "new Date()"
+            elif "Record<" in ts_type or ts_type == "object":
+                default_value = "{}"
+            elif "Map<" in ts_type:
+                default_value = "new Map()"
+            elif "Set<" in ts_type:
+                default_value = "new Set()"
+
+            if attr_name in init_params:
+                # Use the correct type for constructor parameters
+                ts_type = param_types.get(attr_name, ts_type)
+                # For constructor params, don't provide a default value in the declaration
+                # but use the definite assignment assertion
+                class_code += f"  {attr_name}?: {ts_type};\n"
+            elif default_value:
+                class_code += f"  {attr_name}: {ts_type} = {default_value};\n"
+            else:
+                # Use definite assignment assertion (!) for complex types without a clear default
+                class_code += f"  {attr_name}!: {ts_type};\n"
+
+    # Add constructor with actual init parameters
+    if constructor_params:
+        # Make all parameters after first required one optional to make TypeScript happy
+        class_code += f"""
+  constructor({', '.join(constructor_params)}) {{
+    // Initialize properties
+"""
+        # Add assignments for each parameter
+        for param in init_params:
+            # Only set the property if the parameter was provided
+            class_code += f"    if ({param} !== undefined) this.{param} = {param};\n"
+
+        # End constructor
+        class_code += "  }\n"
+    else:
+        class_code += f"""
+  constructor(data: Record<string, any> = {{}}) {{
+    Object.assign(this, data);
+  }}
+"""
+
+    class_code += "}\n"
+
+    # Add factory function that accepts an options object
+    class_code += f"""
+export function create{class_name}(options: Partial<{class_name}> = {{}}): {class_name} {{
+  return new {class_name}(options as any);
+}}
+"""
+
+    return class_code
