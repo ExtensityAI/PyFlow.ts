@@ -55,7 +55,7 @@ Here's how to quickly test PyFlow.ts with your Python code:
 Generate TypeScript code from your Python module:
 
 ```bash
-pyflow init -m examples/ -o /generated
+pyflow init -m ./examples -o ./generated
 ```
 
 This command:
@@ -68,7 +68,7 @@ This command:
 Start the API server to expose your Python functions:
 
 ```bash
-pyflow run -m examples/ -g generated
+pyflow run -m ./examples -g ./generated
 ```
 
 This command:
@@ -81,11 +81,11 @@ This command:
 Test your TypeScript code with the `test` command:
 
 ```bash
-pyflow test -f demo.ts -g generated --debug
+pyflow test -f demo.ts -g ./generated --debug
 ```
 
 This command:
-- Runs the specified TypeScript file (`examples/basic/calculator-app.ts`)
+- Runs the specified TypeScript file (`demo.ts`)
 - Uses the generated TypeScript code in the directory (`examples/basic/generated`)
 - Connects to the API server on the specified port (default 8000)
 - Provides verbose output with the `--debug` flag
@@ -238,14 +238,14 @@ class Calculator:
 
 ```bash
 # Initialize a complete project
-pyflow init -m calculator.py -o ./generated
+pyflow init -m ./examples/basic -o ./examples/basic/generated
 ```
 
 OR generate the TypeScript code manually:
 
 ```bash
 # Generate TypeScript code only
-pyflow generate -m calculator.py -o ./generated
+pyflow generate -m ./examples/basic -o ./examples/basic/generated
 ```
 
 If you used `init`, the the a node project is initialized with npm dependencies.
@@ -266,7 +266,7 @@ The generated `index.ts` will already have imports set up. For our calculator ex
 
 ```typescript
 // index.ts
-import { add, subtract, multiply, divide, Calculator } from './generated/calculator/index.js';
+import { add, subtract, multiply, divide, Calculator } from './generated/calculator';
 
 async function runCalculator() {
   console.log("Basic operations:");
@@ -340,7 +340,7 @@ pyflow generate -m MODULE -o OUTPUT_DIR
 
 ### Run command
 
-- `-m, --module`: Module to import, file path, or directory to scan (required)
+- `-m, --module`: Module to import, or directory to scan (required)
 - `-g, --generate-dir`: Directory containing generated TypeScript code (optional)
 - `--host`: Host to bind to (default: 0.0.0.0)
 - `--port`: Port to bind to (default: 8000)
@@ -351,8 +351,11 @@ If the specified port is already in use, PyFlow.ts will automatically attempt to
 
 ### Generate command
 
-- `-m, --module`: Module to import, file path, or directory to scan (required)
+- `-m, --module`: Module to import, or directory to scan (required)
 - `-o, --output`: Output directory for generated TypeScript code (required)
+- `--host`: Host to bind to (default:
+- `--port`: Port to bind to (default: 8000)
+- `--debug`: Enable debug mode for verbose output
 
 ## Directory Scanning
 
@@ -364,10 +367,10 @@ To process all Python files in a directory:
 
 ```bash
 # Process a single directory
-pyflow generate -m ./your_directory -o ./generated
+pyflow generate -m ./your_directory -o ./generated_direrctory
 
 # Run server for all modules in a directory
-pyflow run -m ./your_directory -g ./generated
+pyflow run -m ./your_directory -g ./generated_direrctory
 ```
 
 When specifying a directory, PyFlow.ts will:
@@ -379,26 +382,12 @@ When specifying a directory, PyFlow.ts will:
 
 This is particularly useful for larger projects with multiple modules.
 
-### Importing Local Files
-
-PyFlow.ts can also import Python files directly without requiring them to be in the Python path:
-
-```bash
-# Import a specific file
-pyflow generate -m ./path/ -o ./generated
-
-# Run server for a specific file
-pyflow run -m ./path/ -g ./generated
-```
-
-## Port Configuration
-
 ### Using a Custom Port
 
 You can specify a custom port for the PyFlow.ts server:
 
 ```bash
-pyflow run -m your_module --port 8080
+pyflow run -m ./your_module --port 8080
 ```
 
 ### Automatic Port Selection
@@ -406,7 +395,7 @@ pyflow run -m your_module --port 8080
 If the specified port is already in use, PyFlow.ts will automatically attempt to find an available port:
 
 ```
-$ pyflow run -m your_module
+$ pyflow run -m ./your_module
 Warning: Port 8000 is already in use.
 Using alternative port 8001 instead.
 ```
