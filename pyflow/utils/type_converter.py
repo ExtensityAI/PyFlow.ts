@@ -199,6 +199,10 @@ def generate_ts_class(cls: Type) -> str:
     # Build the class string
     lines = [f"export class {class_name} {{"]
 
+    # Add instance tracking property
+    lines.append(f"  // Instance tracking")
+    lines.append(f"  private _instanceId?: string;")
+
     # Get all properties from the interface
     try:
         attrs = get_type_hints(cls)
@@ -338,15 +342,30 @@ def generate_ts_class(cls: Type) -> str:
                 for param in init_params:
                     constructor_args.append(f"{param}: this.{param}")
 
-                lines.append(f"    return pyflowRuntime.callMethod(")
+                # Create arguments object
+                if param_names:
+                    args_obj = "{" + ', '.join(f'{pname}: {pname}' for pname in param_names) + "}"
+                else:
+                    args_obj = "{}"
+
+                lines.append(f"    const result = await pyflowRuntime.callMethod(")
                 lines.append(f"      '{class_name}',")
                 lines.append(f"      '{name}',")
-                lines.append(f"      {{{', '.join(f'{pname}: {pname}' for pname in param_names)}}},")
-                if constructor_args:
-                    lines.append(f"      {{{', '.join(constructor_args)}}}")
-                else:
-                    lines.append(f"      {{}}")
+                lines.append(f"      {args_obj},")  # Regular method arguments
+                lines.append(f"      {{{', '.join(constructor_args)}}},")  # Constructor args
+                lines.append(f"      this")  # Pass this reference separately
                 lines.append(f"    );")
+
+                # Store instance ID if it was returned - with proper null check
+                lines.append(f"    if (result && result.__instance_id__) {{")
+                lines.append(f"      this._instanceId = result.__instance_id__;")
+                lines.append(f"      if (this._instanceId) {{")  # Add null check
+                lines.append(f"        pyflowRuntime.registerInstance(this, this._instanceId);")
+                lines.append(f"      }}")
+                lines.append(f"      delete result.__instance_id__;")
+                lines.append(f"    }}")
+
+                lines.append(f"    return result;")
                 lines.append(f"  }}")
             else:
                 # For non-decorated methods in non-decorated classes, provide a stub implementation
@@ -356,11 +375,12 @@ def generate_ts_class(cls: Type) -> str:
                 lines.append(f"  }}")
 
             lines.append("")
+
         except (TypeError, ValueError):
             # Skip methods with invalid signatures
             pass
 
-    # Add createInstance static method
+    # Add createInstance static method with improved instance tracking
     if constructor_params:
         # For classes with required constructor params
         req_params = []
@@ -376,14 +396,22 @@ def generate_ts_class(cls: Type) -> str:
         lines.append(f"  static async createInstance({', '.join(params_list)}, additionalArgs: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
         lines.append(f"    const constructorArgs = {{{', '.join([p.split(':')[0].replace('?', '') for p in constructor_params])}}};")
         lines.append(f"    const instance = new {class_name}({', '.join([p.split(':')[0].replace('?', '') for p in params_list])}, additionalArgs);")
-        lines.append(f"    await pyflowRuntime.createInstance('{class_name}', constructorArgs);")
+        lines.append(f"    const instanceId = await pyflowRuntime.createInstance('{class_name}', constructorArgs);")
+        lines.append(f"    instance._instanceId = instanceId;")
+        lines.append(f"    if (instanceId) {{")  # Add null check
+        lines.append(f"      pyflowRuntime.registerInstance(instance, instanceId);")
+        lines.append(f"    }}")
         lines.append("    return instance;")
         lines.append("  }")
     else:
         # Simple case - no required params
         lines.append(f"  static async createInstance(args: Partial<{class_name}> = {{}}): Promise<{class_name}> {{")
         lines.append(f"    const instance = new {class_name}(args);")
-        lines.append(f"    await pyflowRuntime.createInstance('{class_name}', args);")
+        lines.append(f"    const instanceId = await pyflowRuntime.createInstance('{class_name}', args);")
+        lines.append(f"    instance._instanceId = instanceId;")
+        lines.append(f"    if (instanceId) {{")  # Add null check
+        lines.append(f"      pyflowRuntime.registerInstance(instance, instanceId);")
+        lines.append(f"    }}")
         lines.append("    return instance;")
         lines.append("  }")
 

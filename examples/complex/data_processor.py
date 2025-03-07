@@ -44,15 +44,44 @@ class DataSeries:
 
     @extensity
     def add_point(self, point: DataPoint) -> None:
-        self.data_points.append(point)
+        if isinstance(point, dict):
+            # Convert dict to DataPoint if needed
+            self.data_points.append(
+                DataPoint(point['timestamp'], point['value'], point.get('tags'))
+            )
+        else:
+            self.data_points.append(point)
 
     @extensity
     def add_points(self, points: List[DataPoint]) -> None:
-        self.data_points.extend(points)
+        for point in points:
+            if isinstance(point, dict):
+                # Convert dict to DataPoint if needed
+                self.data_points.append(
+                    DataPoint(point['timestamp'], point['value'], point.get('tags'))
+                )
+            else:
+                self.data_points.append(point)
 
     @extensity
     def get_points(self) -> List[Dict[str, Any]]:
-        return [point.to_dict() for point in self.data_points]
+        print("Getting points:", self.data_points)
+        result = []
+        for point in self.data_points:
+            if isinstance(point, dict):
+                # If it's already a dictionary, just use it
+                result.append(point)
+            elif hasattr(point, 'to_dict') and callable(getattr(point, 'to_dict')):
+                # If it has a to_dict method, call it
+                result.append(point.to_dict())
+            else:
+                # Try to convert any other types to dict
+                try:
+                    result.append(vars(point))
+                except:
+                    # Fallback - just stringify it
+                    result.append({"value": str(point)})
+        return result
 
     @extensity
     def get_my_type(self) -> MyType:

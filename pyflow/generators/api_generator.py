@@ -24,6 +24,7 @@ import importlib
 import uuid
 import json
 import traceback
+import datetime as dt  # Added for timestamp tracking
 
 from typing import Any, Dict, List, Optional, Union, Type
 from fastapi import FastAPI, HTTPException, Body, Request
@@ -48,6 +49,40 @@ def debug_log(message: str, *args, **kwargs):
             print(f"[PyFlow API] {{message}} {{all_args_str}}")
         else:
             print(f"[PyFlow API] {{message}}")
+
+# Process arguments that may contain instance references
+def process_args(args):
+    """Process arguments to handle object instance references."""
+    if not args:
+        return args
+
+    if isinstance(args, dict):
+        result = {{}}
+        for key, value in args.items():
+            if isinstance(value, dict) and value.get("__object_ref__") and "__instance_id__" in value:
+                # This is a reference to a cached instance
+                instance_id = value["__instance_id__"]
+                if instance_id in instance_cache:
+                    result[key] = instance_cache[instance_id]["instance"]
+                else:
+                    debug_log(f"Warning: Referenced instance ID {{instance_id}} not found in cache")
+                    result[key] = None
+            elif isinstance(value, dict):
+                # Recursively process nested dictionaries
+                result[key] = process_args(value)
+            elif isinstance(value, list):
+                # Recursively process lists
+                result[key] = process_args(value)
+            else:
+                # Pass through other values
+                result[key] = value
+        return result
+    elif isinstance(args, list):
+        # Process each item in the list
+        return [process_args(item) for item in args]
+    else:
+        # Return non-dict, non-list values as is
+        return args
 
 # Dynamic model generation for function args
 def create_request_model(func_name: str, params: Dict[str, Any]) -> Type[BaseModel]:
@@ -74,7 +109,7 @@ async def call_function(request: Dict[str, Any] = Body(...)):
     """Call a Python function."""
     module_name = request.get("module")
     function_name = request.get("function")
-    args = request.get("args", {{}})
+    args = process_args(request.get("args", {{}}))
 
     debug_log(f"Calling function: {{module_name}}.{{function_name}}", args=args)
 
@@ -123,137 +158,123 @@ async def create_instance(request: Dict[str, Any] = Body(...)):
     """Create a new class instance and return its ID."""
     class_name = request.get("class")
     module_name = request.get("module", "")  # Get optional module name
-    constructor_args = request.get("constructor_args", {{}})
+    constructor_args = process_args(request.get("constructor_args", {{}}))
 
-    # Detailed debug logging for request data
-    print(f"==== CREATE INSTANCE REQUEST ====")
-    print(f"Raw request: {{request}}")
-    print(f"Class name: {{class_name}}")
-    print(f"Module name: {{module_name}}")
-    print(f"Constructor args: {{json.dumps(constructor_args, default=str, indent=2)}}")
-
-    # Check for common issues in constructor_args
-    if constructor_args:
-        for key, value in constructor_args.items():
-            if key == '_module':
-                print(f"Module from constructor_args: {{value}}")
-            if value is None:
-                print(f"Warning: Parameter {{key}} is None")
-            elif isinstance(value, dict) and not value:
-                print(f"Warning: Parameter {{key}} is an empty dict")
+    if DEBUG:
+        print(f"==== CREATE INSTANCE REQUEST ====")
+        print(f"Class name: {{class_name}}")
+        print(f"Module name: {{module_name}}")
+        print(f"Constructor args: {{json.dumps(constructor_args, default=str, indent=2)}}")
 
     if not class_name:
         raise HTTPException(status_code=400, detail="Class name is required")
 
     try:
         # Find class using existing methods
-        print(f"Creating new instance of class: {{class_name}}")
-        if module_name:
-            print(f"From module: {{module_name}}")
+        debug_log(f"Creating new instance of class: {{class_name}}")
 
         # Find the class (using multiple lookup strategies)
         cls = None
-        available_classes = []
 
-        # Show registry contents for debugging
-        print(f"Registry contains {{len(registry.classes)}} classes:")
-        for reg_name, reg_info in registry.classes.items():
-            reg_module = reg_info.get('module', '')
-            print(f"  - {{reg_name}} (module: {{reg_module}})")
-            available_classes.append(f"{{reg_name}} (module: {{reg_module}})")
+        # Try multiple strategies to find the class
+        for strategy in ["direct_lookup", "by_short_name", "by_module"]:
+            if cls:
+                break
 
-        # Strategy 1: Look by full name (module.ClassName)
-        if module_name:
-            full_name = f"{{module_name}}.{{class_name}}"
-            print(f"Trying to find class by full name: {{full_name}}")
-            if (full_name in registry.classes):
-                cls = registry.classes[full_name]["cls"]
-                print(f"✅ Found class by full name: {{full_name}}")
+            if strategy == "direct_lookup" and class_name in registry.classes:
+                cls = registry.classes[class_name]["cls"]
+                debug_log(f"Found class by direct lookup: {{class_name}}")
 
-        # Strategy 2: Look by short name in all registered classes
-        if not cls:
-            print(f"Trying to find class by short name: {{class_name}}")
-            for registered_name, class_info in registry.classes.items():
-                short_name = registered_name.split('.')[-1]
-                if short_name == class_name:
-                    cls = class_info["cls"]
-                    print(f"✅ Found class by short name: {{class_name}} (full: {{registered_name}})")
-                    break
+            elif strategy == "by_short_name":
+                for registered_name, class_info in registry.classes.items():
+                    short_name = registered_name.split('.')[-1]
+                    if short_name == class_name:
+                        cls = class_info["cls"]
+                        debug_log(f"Found class by short name: {{class_name}} (full: {{registered_name}})")
+                        break
 
-        # Strategy 3: If module name is provided, try finding classes with matching module
-        if not cls and module_name:
-            print(f"Trying to find class by module and name: {{module_name}}.{{class_name}}")
-            for registered_name, class_info in registry.classes.items():
-                registered_module = class_info.get('module', '')
-                if module_name == registered_module and registered_name.endswith(f".{{class_name}}"):
-                    cls = class_info["cls"]
-                    print(f"✅ Found class by module and name: {{registered_name}}")
-                    break
-
-        # Final attempt - try a direct lookup by class name
-        if not cls and class_name in registry.classes:
-            print(f"Trying direct registry lookup: {{class_name}}")
-            cls = registry.classes[class_name]["cls"]
-            print(f"✅ Found class by direct registry lookup: {{class_name}}")
+            elif strategy == "by_module" and "module" in request:
+                module_name = request["module"]
+                for registered_name, class_info in registry.classes.items():
+                    if (class_info.get('module') == module_name and
+                        registered_name.endswith(f".{{class_name}}")):
+                        cls = class_info["cls"]
+                        debug_log(f"Found class by module and name: {{registered_name}}")
+                        break
 
         if not cls:
-            # Detailed error message with available classes
-            error_msg = f"Class '{{class_name}}' not found in registry. Available classes: {{', '.join(available_classes)}}"
-            print(f"❌ Error: {{error_msg}}")
+            available_classes = [f"{{name}} (module: {{info.get('module', 'unknown')}})"
+                               for name, info in registry.classes.items()]
+            error_msg = f"Class '{{class_name}}' not found in registry. Available: {{', '.join(available_classes)}}"
+            debug_log(f"Error: {{error_msg}}")
             raise HTTPException(status_code=404, detail=error_msg)
 
         # Create instance with constructor args
-        instance = None
         try:
-            print(f"Creating instance of {{cls.__name__}} with args: {{constructor_args}}")
             if constructor_args:
-                # Filter out '_module' which is a special parameter for our system
-                filtered_args = {{k: v for k, v in constructor_args.items() if k != '_module'}}
+                # Filter out any special parameters
+                filtered_args = {{k: v for k, v in constructor_args.items() if not k.startswith('__')}}
+                debug_log(f"Creating instance with args: {{filtered_args}}")
                 instance = cls(**filtered_args)
             else:
+                debug_log("Creating instance with no args")
                 instance = cls()
+
+            # Generate unique ID and store instance in cache
+            instance_id = str(uuid.uuid4())
+            instance_cache[instance_id] = {{
+                'instance': instance,
+                'class_name': class_name,
+                'creation_time': dt.datetime.now().isoformat(),
+            }}
+
+            debug_log(f"✅ Created instance with ID: {{instance_id}}")
+            # Return the instance ID and info
+            return {{
+                "instance_id": instance_id,
+                "class_name": class_name
+            }}
 
         except TypeError as e:
             error_msg = str(e)
-            print(f"❌ TypeError during instance creation: {{error_msg}}")
+            debug_log(f"❌ TypeError during instance creation: {{error_msg}}")
             # Special handling for classes that might need specific args
             if "missing 1 required positional argument:" in error_msg:
                 missing_arg = error_msg.split("missing 1 required positional argument: '")[1].split("'")[0]
-                print(f"Missing required argument: {{missing_arg}}")
+                debug_log(f"Missing required argument: {{missing_arg}}")
                 if missing_arg in constructor_args:
-                    print(f"Trying to create with just the required argument: {{missing_arg}}")
+                    debug_log(f"Trying to create with just the required argument: {{missing_arg}}")
                     # Try to create with just the required argument
                     instance = cls(**{{missing_arg: constructor_args[missing_arg]}})
-                    print(f"✅ Instance created successfully with {{missing_arg}}")
+
+                    # Generate unique ID and store instance
+                    instance_id = str(uuid.uuid4())
+                    instance_cache[instance_id] = {{
+                        'instance': instance,
+                        'class_name': class_name,
+                        'creation_time': dt.datetime.now().isoformat(),
+                    }}
+
+                    debug_log(f"✅ Instance created successfully with {{missing_arg}}")
+                    return {{
+                        "instance_id": instance_id,
+                        "class_name": class_name
+                    }}
                 else:
                     error_detail = f"Missing required constructor argument: {{missing_arg}}. Provided args: {{list(constructor_args.keys())}}"
-                    print(f"❌ {{error_detail}}")
+                    debug_log(f"❌ {{error_detail}}")
                     raise HTTPException(status_code=400, detail=error_detail)
             else:
-                print(f"❌ Invalid constructor args: {{str(e)}}")
+                debug_log(f"❌ Invalid constructor args: {{str(e)}}")
                 raise HTTPException(status_code=400, detail=f"Invalid constructor args: {{str(e)}}")
-
-        # Generate unique ID and store instance in cache
-        instance_id = str(uuid.uuid4())
-        instance_cache[instance_id] = {{
-            'instance': instance,
-            'class_name': class_name
-        }}
-
-        print(f"✅ Created instance with ID: {{instance_id}}")
-        # Return the instance ID and info
-        return {{
-            "instance_id": instance_id,
-            "class_name": class_name
-        }}
 
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
         import traceback
-        print(f"❌ Error creating instance: {{str(e)}}")
-        print(traceback.format_exc())
+        debug_log(f"❌ Error creating instance: {{str(e)}}")
+        debug_log(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error creating instance: {{str(e)}}")
 
 @app.post("/api/call-method")
@@ -261,9 +282,13 @@ async def call_method(request: Dict[str, Any] = Body(...)):
     """Call a method on a Python class instance."""
     instance_id = request.get("instance_id")
     method_name = request.get("method")
-    args = request.get("args", {{}})
-    constructor_args = request.get("constructor_args", {{}})
+    args = process_args(request.get("args", {{}}))
+    constructor_args = process_args(request.get("constructor_args", {{}}))
     class_name = request.get("class")
+
+    # Remove __self__ from args (it's just for TypeScript tracking)
+    if "__self__" in args:
+        del args["__self__"]
 
     debug_log(f"Method call request: class={{class_name}}, method={{method_name}}, instance_id={{instance_id}}")
     debug_log(f"Args: {{json.dumps(args, default=str)}}")
@@ -326,7 +351,9 @@ async def call_method(request: Dict[str, Any] = Body(...)):
             instance_id = str(uuid.uuid4())
             instance_cache[instance_id] = {{
                 'instance': instance,
-                'class_name': class_name
+                'class_name': class_name,
+                'creation_time': dt.datetime.now().isoformat(),
+                'last_accessed': dt.datetime.now().isoformat()
             }}
             debug_log(f"Created temporary instance with ID: {{instance_id}}")
 
@@ -343,6 +370,9 @@ async def call_method(request: Dict[str, Any] = Body(...)):
         instance_data = instance_cache[instance_id]
         instance = instance_data['instance']
         class_name = instance_data['class_name']
+
+        # Update last accessed timestamp for tracking
+        instance_cache[instance_id]['last_accessed'] = dt.datetime.now().isoformat()
 
     # Get and call the method
     if not method_name:
@@ -375,15 +405,16 @@ async def call_method(request: Dict[str, Any] = Body(...)):
         result = method(**args)
         debug_log(f"Method result type: {{type(result).__name__}}")
 
-        # For complex objects, try to convert to serializable form
-        if hasattr(result, '__dict__'):
-            debug_log("Converting object result to dict")
-            try:
-                result = vars(result)
-            except:
-                debug_log("Could not convert to dict, returning as is")
+        # Process the result for JSON serialization
+        result = process_result_for_serialization(result)
 
-        return {{"result": result, "instance_id": instance_id}}
+        # Always include the instance_id in the response
+        # This is crucial for the client to maintain state across method calls
+        return {{
+            "result": result,
+            "instance_id": instance_id,
+            "__instance_id__": instance_id  # Include in both formats for TypeScript client
+        }}
 
     except HTTPException:
         # Re-raise HTTP exceptions as-is
@@ -392,6 +423,81 @@ async def call_method(request: Dict[str, Any] = Body(...)):
         debug_log(f"Error calling method: {{str(e)}}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error calling method: {{str(e)}}")
+
+# Add a helper function for result processing
+def process_result_for_serialization(result):
+    """Process a result object to make it JSON serializable."""
+    # Check if it's a list first
+    if isinstance(result, list):
+        debug_log("Processing list result")
+        processed_result = []
+        for item in result:
+            processed_result.append(process_result_for_serialization(item))
+        return processed_result
+
+    # For dictionaries, just return them as they are (they're already serializable)
+    elif isinstance(result, dict):
+        return result
+
+    # For objects with __dict__ attribute
+    elif hasattr(result, '__dict__'):
+        debug_log(f"Converting object of type {{type(result).__name__}} to dict")
+        try:
+            return vars(result)
+        except:
+            debug_log("Could not convert to dict with vars(), trying __dict__")
+            try:
+                return result.__dict__
+            except:
+                debug_log("Could not get __dict__, returning as is")
+                return result
+
+    # Just return other types as they are
+    return result
+
+# Add a new endpoint to get instance info for debugging
+@app.get("/api/instance/{{instance_id}}")
+async def get_instance_info(instance_id: str):
+    """Get information about a cached instance."""
+    if instance_id not in instance_cache:
+        raise HTTPException(status_code=404, detail=f"No instance found with ID {{instance_id}}")
+
+    instance_data = instance_cache[instance_id]
+    instance = instance_data['instance']
+
+    # Get public attributes of the instance
+    attributes = {{}}
+    for key, value in vars(instance).items():
+        if not key.startswith('_'):  # Skip private attributes
+            try:
+                # Try to convert to JSON-serializable form
+                json.dumps({{key: value}})
+                attributes[key] = value
+            except (TypeError, ValueError):
+                # If not serializable, just include the type
+                attributes[key] = f"<{{type(value).__name__}}>"
+
+    return {
+        "instance_id": instance_id,
+        "class_name": instance_data['class_name'],
+        "creation_time": instance_data['creation_time'],
+        "last_accessed": instance_data.get('last_accessed', 'unknown'),
+        "attributes": attributes
+    }
+
+# Add endpoint to list all active instances
+@app.get("/api/instances")
+async def list_instances():
+    """List all active instances in the cache."""
+    result = []
+    for instance_id, data in instance_cache.items():
+        result.append({
+            "instance_id": instance_id,
+            "class_name": data['class_name'],
+            "creation_time": data.get('creation_time', 'unknown'),
+            "last_accessed": data.get('last_accessed', 'unknown')
+        })
+    return result
 
 # Additional API endpoints for listing available services
 @app.get("/api/services")

@@ -28,12 +28,13 @@ class TypeScriptGenerator:
         self.host = host
         self.port = port
         self.debug = debug
-        # Runtime code with improved constructor argument handling
+        # Runtime code with improved constructor argument handling and instance tracking
         self.runtime_code = f"""// PyFlow.ts runtime for TypeScript
 export interface PyFlowRuntime {{
   callFunction(moduleName: string, functionName: string, args: any): any;
-  callMethod(className: string, methodName: string, args: any, constructorArgs: any): any;
+  callMethod(className: string, methodName: string, args: any, constructorArgs: any, instanceObj?: any): any;
   createInstance(className: string, constructorArgs: any): any;
+  registerInstance(obj: any, instanceId: string | undefined): void;
 }}
 
 // Default implementation that uses fetch to call the Python API
@@ -41,8 +42,9 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
   apiUrl: string;
   debug: boolean;
 
-  // Track instances by ID
+  // Track instances by class and object ID
   private instanceCache = new Map<string, string>();
+  private instanceIds = new Map<Object, string>();
 
   debugLog(message: string, data?: any) {{
     if (this.debug) {{
@@ -67,6 +69,9 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       args: args
     }});
 
+    // Convert any instance objects in args to their IDs
+    const processedArgs = this.processArgs(args);
+
     const response = await fetch(`${{this.apiUrl}}/call-function`, {{
       method: 'POST',
       headers: {{
@@ -75,7 +80,7 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       body: JSON.stringify({{
         module: moduleName,
         function: functionName,
-        args: args,
+        args: processedArgs,
       }}),
     }});
 
@@ -90,14 +95,53 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     return data.result;
   }}
 
+  // Process arguments to handle objects with instance IDs
+  processArgs(args: any): any {{
+    if (!args) return {{}};
+
+    const processedArgs: any = Array.isArray(args) ? [] : {{}};
+
+    for (const key in args) {{
+      const value = args[key];
+
+      if (value && typeof value === 'object') {{
+        // Check if this object has an instance ID
+        if (this.instanceIds.has(value)) {{
+          // Replace object with reference
+          processedArgs[key] = {{
+            __instance_id__: this.instanceIds.get(value),
+            __object_ref__: true
+          }};
+        }}
+        else if (Array.isArray(value)) {{
+          // Process array contents recursively
+          processedArgs[key] = this.processArgs(value);
+        }}
+        else if (Object.prototype.toString.call(value) === '[object Date]') {{
+          // Convert Date objects to ISO strings
+          processedArgs[key] = value.toISOString();
+        }}
+        else {{
+          // Process normal object recursively
+          processedArgs[key] = this.processArgs(value);
+        }}
+      }} else {{
+        // Pass through primitive values
+        processedArgs[key] = value;
+      }}
+    }}
+
+    return processedArgs;
+  }}
+
   async createInstance(className: string, constructorArgs: any): Promise<string> {{
     this.debugLog(`Creating instance of: ${{className}}`, {{
       class: className,
       constructorArgs: constructorArgs
     }});
 
-    // Ensure constructor args aren't undefined
-    const safeArgs = constructorArgs || {{}};
+    // Ensure constructor args aren't undefined and process them
+    const safeArgs = this.processArgs(constructorArgs || {{}});
 
     const response = await fetch(`${{this.apiUrl}}/create-instance`, {{
       method: 'POST',
@@ -117,22 +161,45 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     }}
 
     const data = await response.json();
-    this.instanceCache.set(className, data.instance_id);
-    this.debugLog(`Created instance with ID: ${{data.instance_id}}`);
-    return data.instance_id;
+    const instanceId = data.instance_id;
+    this.debugLog(`Created instance with ID: ${{instanceId}}`);
+
+    // Store in the class-based cache - useful for some scenarios
+    this.instanceCache.set(className, instanceId);
+
+    return instanceId;
   }}
 
-  async callMethod(className: string, methodName: string, args: any, constructorArgs: any): Promise<any> {{
-    const instanceId = this.instanceCache.get(className);
+  // Register an object with an instance ID for tracking
+  registerInstance(obj: any, instanceId: string | undefined) {{
+    if (obj && instanceId) {{
+      this.instanceIds.set(obj, instanceId);
+      this.debugLog(`Registered object with instance ID: ${{instanceId}}`);
+    }}
+  }}
+
+  async callMethod(className: string, methodName: string, args: any, constructorArgs: any, instanceObj?: any): Promise<any> {{
+    // Get instance ID from the object if provided
+    let instanceId = null;
+    if (instanceObj && this.instanceIds.has(instanceObj)) {{
+      instanceId = this.instanceIds.get(instanceObj);
+      this.debugLog(`Found instance ID from object: ${{instanceId}}`);
+    }}
+
+    // If not found, fall back to the class-based cache
+    if (!instanceId) {{
+      instanceId = this.instanceCache.get(className);
+      this.debugLog(`Using class-based instance ID: ${{instanceId}}`);
+    }}
 
     // Ensure args and constructorArgs aren't undefined
-    const safeArgs = args || {{}};
-    const safeConstructorArgs = constructorArgs || {{}};
+    const processedArgs = this.processArgs(args || {{}});
+    const safeConstructorArgs = this.processArgs(constructorArgs || {{}});
 
     this.debugLog(`Calling method: ${{className}}.${{methodName}}`, {{
       class: className,
       method: methodName,
-      args: safeArgs,
+      args: processedArgs,
       constructorArgs: safeConstructorArgs,
       instanceId: instanceId
     }});
@@ -145,7 +212,7 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
       body: JSON.stringify({{
         class: className,
         method: methodName,
-        args: safeArgs,
+        args: processedArgs,
         constructor_args: safeConstructorArgs,
         instance_id: instanceId,
       }}),
@@ -158,6 +225,16 @@ class DefaultPyFlowRuntime implements PyFlowRuntime {{
     }}
 
     const data = await response.json();
+
+    // If we got a new instance ID back, register it
+    if (data.instance_id && data.instance_id !== instanceId) {{
+      this.instanceCache.set(className, data.instance_id);
+      // If there's an instance object, register it too
+      if (instanceObj) {{
+        this.registerInstance(instanceObj, data.instance_id);
+      }}
+    }}
+
     this.debugLog(`Method result:`, data.result);
     return data.result;
   }}
