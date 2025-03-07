@@ -1,33 +1,91 @@
-// Import the generated code directly from the index file instead of the calculator path
-import { add, subtract, multiply, divide, Calculator } from './generated/basic/calculator';
+import {
+  DataPoint,
+  DataSeries,
+  create_data_point,
+  analyze_data_series
+} from './generated/complex/data_processor';
 
-async function runCalculator() {
-  console.log("Basic operations:");
-  console.log(`5 + 3 = ${await add(5, 3)}`);
-  console.log(`10 - 4 = ${await subtract(10, 4)}`);
-  console.log(`6 * 7 = ${await multiply(6, 7)}`);
-  console.log(`20 / 5 = ${await divide(20, 5)}`);
+async function runDataAnalysis() {
+  // Create a data series using Python-generated data points
+  const series = new DataSeries("temperature");
 
-  console.log("\nUsing Calculator class:");
-  const calculator = new Calculator();
+  // Create sample data points
+  const point1 = await create_data_point(
+    "2023-01-01T12:00:00",
+    22.5,
+    { "location": "living_room", "sensor": "A" }
+  );
 
-  // Perform calculations
-  console.log(`Calculator: 10 + 5 = ${await calculator.calculate(10, 5, "add")}`);
-  console.log(`Calculator: 10 - 5 = ${await calculator.calculate(10, 5, "subtract")}`);
-  console.log(`Calculator: 10 * 5 = ${await calculator.calculate(10, 5, "multiply")}`);
-  console.log(`Calculator: 10 / 5 = ${await calculator.calculate(10, 5, "divide")}`);
+  const point2 = await create_data_point(
+    "2023-01-01T12:30:00",
+    23.1,
+    { "location": "living_room", "sensor": "A" }
+  );
 
-  // Get history
-  const history = await calculator.get_history();
-  console.log("\nCalculation history:");
-  history.forEach((entry, index) => {
-    console.log(`${index + 1}. ${entry.a} ${entry.operation} ${entry.b} = ${entry.result}`);
+  const point3 = await create_data_point(
+    "2023-01-01T12:00:00",
+    21.8,
+    { "location": "bedroom", "sensor": "B" }
+  );
+
+  const point4 = await create_data_point(
+    "2023-01-01T12:30:00",
+    22.2,
+    { "location": "bedroom", "sensor": "B" }
+  );
+
+  const point5 = await create_data_point(
+    "2023-01-01T12:00:00",
+    24.1,
+    { "location": "kitchen", "sensor": "C" }
+  );
+
+  // Add the points to the data series
+  await series.add_points([
+    new DataPoint(point1.timestamp, point1.value, point1.tags),
+    new DataPoint(point2.timestamp, point2.value, point2.tags),
+    new DataPoint(point3.timestamp, point3.value, point3.tags),
+    new DataPoint(point4.timestamp, point4.value, point4.tags),
+    new DataPoint(point5.timestamp, point5.value, point5.tags)
+  ]);
+
+  // Get all points
+  const points = await series.get_points();
+  console.log("Data points:");
+  points.forEach((point, index) => {
+    console.log(`${index + 1}. ${point.timestamp}: ${point.value}°C (${JSON.stringify(point.tags)})`);
   });
 
-  // Clear history
-  await calculator.clear_history();
-  console.log("\nHistory cleared.");
-  console.log(`History items: ${(await calculator.get_history()).length}`);
+  // Get statistics
+  const stats = await series.get_statistics();
+  console.log("\nData statistics:");
+  console.log(`Count: ${stats.count}`);
+  console.log(`Min: ${stats.min}°C`);
+  console.log(`Max: ${stats.max}°C`);
+  console.log(`Mean: ${stats.mean.toFixed(2)}°C`);
+  console.log(`Median: ${stats.median.toFixed(2)}°C`);
+
+  // Analyze the data series using the Python function
+  const analysis = await analyze_data_series(points);
+
+  console.log("\nDetailed analysis:");
+  console.log(`Overall mean: ${analysis.overall.mean.toFixed(2)}°C`);
+
+  console.log("\nBy location:");
+  const locationStats = analysis.by_tag.location;
+  for (const location in locationStats) {
+    console.log(`- ${location}: ${locationStats[location].mean.toFixed(2)}°C (${locationStats[location].count} readings)`);
+  }
+
+  console.log("\nBy sensor:");
+  const sensorStats = analysis.by_tag.sensor;
+  for (const sensor in sensorStats) {
+    console.log(`- Sensor ${sensor}: ${sensorStats[sensor].mean.toFixed(2)}°C (${sensorStats[sensor].count} readings)`);
+  }
+
+  // Clear the data
+  await series.clear();
+  console.log(`\nSeries cleared. Points remaining: ${(await series.get_points()).length}`);
 }
 
-runCalculator().catch(console.error);
+runDataAnalysis().catch(console.error);

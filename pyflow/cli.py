@@ -9,13 +9,12 @@ import sys
 import tempfile
 from typing import List
 
-from .core import import_module_from_path, scan_directory
+from .core import import_module_from_path
 from .generators.ts_generator import TypeScriptGenerator
 from .generators.api_generator import ApiGenerator
 from .generators.client_generator import ClientGenerator
 from . import PYFLOWTS_VERSION
 
-import re
 import tempfile
 import shutil
 import subprocess
@@ -515,18 +514,50 @@ def initialize_project(args):
         try:
             # Generate TypeScript code with custom host and port
             ts_generator = TypeScriptGenerator(output_path, host=host, port=port, debug=debug)
-            ts_generator.generate_all()
+
+            # Process modules, with additional error handling for web frameworks
+            ts_generator.generate_runtime()
+
+            successful_modules = 0
+            failed_modules = []
+
+            for module_name in modules:
+                try:
+                    ts_generator.generate_module(module_name)
+                    successful_modules += 1
+                except Exception as e:
+                    print(f"Warning: Error generating code for module {module_name}: {str(e)}")
+                    # Don't stop for web framework errors
+                    if "request context" in str(e).lower():
+                        print("This is likely due to a web framework (Flask/Django) integration.")
+                        print("Some functionality might be limited for this module.")
+                    failed_modules.append(module_name)
+
+            if failed_modules:
+                print(f"\nProcessed {successful_modules} modules successfully.")
+                print(f"Had issues with {len(failed_modules)} modules: {', '.join(failed_modules)}")
+                print("You may still be able to use the successfully processed modules.")
+
+            # Generate index files for organization
+            try:
+                ts_generator.generate_index()
+            except Exception as e:
+                print(f"Warning: Error generating index files: {e}")
 
             # Generate API
-            api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
-            api_generator.generate_api()
+            try:
+                api_generator = ApiGenerator(output_path / "_server", host=host, port=port, reload=reload, debug=debug)
+                api_generator.generate_api()
+            except Exception as e:
+                print(f"Warning: Error generating API: {e}")
+                print("You may need to run the API generation step separately.")
 
             # Generate client code
-            client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
-            client_generator.generate_all()
-
-            # Generate an aggregation index file at the root level
-            generate_root_index(output_path, modules)
+            try:
+                client_generator = ClientGenerator(output_path / "_client", host=host, port=port)
+                client_generator.generate_all()
+            except Exception as e:
+                print(f"Warning: Error generating client code: {e}")
         except Exception as e:
             print(f"Warning: Error during code generation: {e}")
             import traceback
@@ -798,7 +829,7 @@ import { pyflowRuntime } from './pyflowRuntime.js';
 
     print(f"Root index file created at {output_dir / 'index.ts'}")
 
-def scan_directory(directory_path: str) -> List[str]:
+def scan_directory(directory_path: str, debug: bool = False) -> List[str]:
     """
     Recursively scan a directory for Python modules with @extensity decorators and import them.
 
@@ -849,9 +880,55 @@ def scan_directory(directory_path: str) -> List[str]:
                         print(f"Created package __init__.py: {init_file}")
                     except (IOError, PermissionError) as e:
                         print(f"Warning: Could not create __init__.py in {root}: {e}")
-                        # Continue without creating the file
 
-        # Collect all Python files first
+        # First, try direct import approach for each Python file
+        # This will catch files even if they're not imported in __init__.py
+        for root, _, files in os.walk(abs_path):
+            if 'generated' in root or '__pycache__' in root:
+                continue
+
+            for file in files:
+                if file.endswith('.py') and not file.startswith('__'):
+                    # Get the module path relative to the base directory
+                    rel_path = os.path.relpath(root, abs_path)
+                    file_path = os.path.join(root, file)
+
+                    if rel_path == '.':
+                        # Top-level module
+                        module_name = file[:-3]  # Remove .py extension
+                    else:
+                        # Submodule
+                        module_parts = rel_path.replace(os.path.sep, '.').split('.')
+                        module_name = f"{'.'.join(module_parts)}.{file[:-3]}"
+
+                    # Try both with and without the directory prefix
+                    module_options = [
+                        module_name,
+                        f"{dir_name}.{module_name}"
+                    ]
+
+                    # Check for @extensity decorator in the file
+                    try:
+                        with open(file_path, 'r') as f:
+                            content = f.read()
+                            has_decorator = '@extensity' in content
+
+                        if has_decorator:
+                            print(f"Found @extensity decorator in {file_path}, attempting import...")
+                            # Try to import the module directly
+                            for module_path in module_options:
+                                try:
+                                    module = importlib.import_module(module_path)
+                                    if len(registry.modules) > 0:  # Verify registration worked
+                                        imported_modules.append(module_path)
+                                        print(f"✅ Successfully imported decorated module: {module_path}")
+                                        break
+                                except ImportError:
+                                    continue
+                    except Exception as e:
+                        print(f"Error checking file {file_path}: {e}")
+
+        # Collect all Python files first (this is the standard approach)
         python_files = []
         for root, dirs, files in os.walk(abs_path):
             # Skip generated directories and __pycache__
@@ -883,18 +960,33 @@ def scan_directory(directory_path: str) -> List[str]:
 
         # Process files - first pass
         for file_path, module_options in python_files:
-            print(f"Checking file: {file_path}")
-            try_import(file_path, module_options, imported_modules, failed_imports, retry_queue)
+            if debug: print(f"Checking file: {file_path}")
+            try_import(file_path, module_options, imported_modules, failed_imports, retry_queue, debug)
 
         # Retry failed imports - they might depend on modules we've now imported
         if retry_queue:
             print("\n🔄 Retrying imports that failed on first pass...")
             for file_path, module_options in retry_queue:
                 print(f"Retrying: {file_path}")
-                try_import(file_path, module_options, imported_modules, failed_imports, [])
+                try_import(file_path, module_options, imported_modules, failed_imports, [], debug)
+
+        # Double-check - scan registry directly to ensure we found everything
+        # This will catch any decorated items that might have been missed
+        added_from_registry = 0
+        registry_modules = list(registry.modules)
+        for reg_module in registry_modules:
+            if reg_module.startswith(dir_name) and reg_module not in imported_modules:
+                imported_modules.append(reg_module)
+                added_from_registry += 1
+
+        if added_from_registry > 0:
+            print(f"Added {added_from_registry} additional modules from registry")
 
         if failed_imports:
             print(f"\n⚠️ {len(failed_imports)} files could not be imported successfully")
+            # list file names for reference
+            for file_path in failed_imports:
+                print(f"   - {file_path}")
 
         # Display PyFlow.ts statistics
         module_count = len(registry.modules)
@@ -932,7 +1024,7 @@ def scan_directory(directory_path: str) -> List[str]:
 
     return imported_modules
 
-def try_import(file_path, module_options, imported_modules, failed_imports, retry_queue):
+def try_import(file_path, module_options, imported_modules, failed_imports, retry_queue, debug: bool = False):
     """Helper function to try importing a module with various strategies."""
     from pyflow.core import registry
 
@@ -975,7 +1067,7 @@ def try_import(file_path, module_options, imported_modules, failed_imports, retr
                     print(f"✅ Imported module with @extensity decorators: {full_module_name}")
                     break  # Successfully imported, no need to try other options
                 elif imported:
-                    print(f"⚠️ No @extensity decorators found in module: {full_module_name}")
+                    if debug: print(f"⚠️ No @extensity decorators found in module: {full_module_name}")
                     break  # Module imported but no decorators, no need to try other options
 
             except Exception as e:

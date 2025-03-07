@@ -1,6 +1,6 @@
 import unittest
 from pyflow.utils.type_converter import (
-    python_type_to_ts_type,
+    python_type_to_ts,
     generate_ts_interface,
     generate_ts_function
 )
@@ -9,27 +9,27 @@ from typing import List, Dict, Any, Union, Optional, Tuple, Set
 class TestTypeConversion(unittest.TestCase):
     def test_primitive_type_conversion(self):
         """Test conversion of primitive Python types to TypeScript."""
-        self.assertEqual(python_type_to_ts_type(str), "string")
-        self.assertEqual(python_type_to_ts_type(int), "number")
-        self.assertEqual(python_type_to_ts_type(float), "number")
-        self.assertEqual(python_type_to_ts_type(bool), "boolean")
-        self.assertEqual(python_type_to_ts_type(None), "null")
+        self.assertEqual(python_type_to_ts(str), "string")
+        self.assertEqual(python_type_to_ts(int), "number")
+        self.assertEqual(python_type_to_ts(float), "number")
+        self.assertEqual(python_type_to_ts(bool), "boolean")
+        self.assertEqual(python_type_to_ts(None), "null")
 
     def test_collection_type_conversion(self):
         """Test conversion of collection Python types to TypeScript."""
-        self.assertEqual(python_type_to_ts_type(list), "any[]")
-        self.assertEqual(python_type_to_ts_type(dict), "Record<string, any>")
-        self.assertEqual(python_type_to_ts_type(tuple), "any[]")
-        self.assertEqual(python_type_to_ts_type(set), "Set<any>")
+        self.assertEqual(python_type_to_ts(list), "any[]")
+        self.assertEqual(python_type_to_ts(dict), "Record<string, any>")
+        self.assertEqual(python_type_to_ts(tuple), "any[]")
+        self.assertEqual(python_type_to_ts(set), "Set<any>")
 
     def test_generic_type_conversion(self):
         """Test conversion of generic Python types to TypeScript."""
-        self.assertEqual(python_type_to_ts_type(List[str]), "string[]")
-        self.assertEqual(python_type_to_ts_type(Dict[str, int]), "Record<string, number>")
-        self.assertEqual(python_type_to_ts_type(Union[str, int]), "string | number")
-        self.assertEqual(python_type_to_ts_type(Optional[str]), "string | null")
-        self.assertEqual(python_type_to_ts_type(Tuple[str, int]), "[string, number]")
-        self.assertEqual(python_type_to_ts_type(Set[str]), "Set<string>")
+        self.assertEqual(python_type_to_ts(List[str]), "string[]")
+        self.assertEqual(python_type_to_ts(Dict[str, int]), "Record<string, number>")
+        self.assertEqual(python_type_to_ts(Union[str, int]), "string | number")
+        self.assertEqual(python_type_to_ts(Optional[str]), "string | null")
+        self.assertEqual(python_type_to_ts(Tuple[str, int]), "[string, number]")
+        self.assertEqual(python_type_to_ts(Set[str]), "Set<string>")
 
     def test_generate_ts_interface(self):
         """Test generating a TypeScript interface from a Python class."""
