@@ -2,7 +2,7 @@
 PyFlow.ts - Bridge Python and TypeScript with ease
 """
 
-PYFLOWTS_VERSION = "0.2.0"
+PYFLOWTS_VERSION = "0.2.1"
 __version__ = PYFLOWTS_VERSION
 
 from .decorators import extensity
